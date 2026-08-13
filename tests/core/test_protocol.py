@@ -16,8 +16,10 @@ import pytest
 from vpnmanager.core.models import Capability, ConnectionState, TunnelType
 from vpnmanager.core.protocol import (
     MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
     Command,
+    MessageStream,
     ProfileSummary,
     ProtocolError,
     Request,
@@ -355,6 +357,123 @@ def test_the_command_set_is_the_expected_one() -> None:
         "status",
         "confirm",
     }
+
+
+# --------------------------------------------------------------------------
+# Troceado del flujo
+# --------------------------------------------------------------------------
+
+
+def test_a_whole_message_arrives_in_one_piece() -> None:
+    stream = MessageStream()
+    encoded = Request(command=Command.LIST).encode()
+
+    assert stream.feed(encoded) == [encoded.removesuffix(b"\n")]
+
+
+def test_several_messages_in_the_same_read() -> None:
+    """Un pipe es un flujo: lo que se lee no coincide con lo que se escribio."""
+    stream = MessageStream()
+    first = Request(command=Command.LIST).encode()
+    second = Request(command=Command.STATUS, profile_id="wireguard-corp").encode()
+
+    messages = stream.feed(first + second)
+
+    assert [Request.decode(m) for m in messages] == [
+        Request(command=Command.LIST),
+        Request(command=Command.STATUS, profile_id="wireguard-corp"),
+    ]
+
+
+def test_a_message_split_across_reads() -> None:
+    stream = MessageStream()
+    encoded = Request(command=Command.CONNECT, profile_id="wireguard-corp").encode()
+
+    assert stream.feed(encoded[:5]) == []
+    assert stream.feed(encoded[5:20]) == []
+    messages = stream.feed(encoded[20:])
+
+    assert [Request.decode(m) for m in messages] == [
+        Request(command=Command.CONNECT, profile_id="wireguard-corp")
+    ]
+
+
+def test_an_empty_read_yields_nothing() -> None:
+    assert MessageStream().feed(b"") == []
+
+
+def test_an_empty_line_is_handed_over_and_rejected_by_the_decoder() -> None:
+    """No se descarta en silencio: se pasa, y el decodificador dice que no."""
+    messages = MessageStream().feed(b"\n")
+
+    assert messages == [b""]
+    with pytest.raises(ProtocolError):
+        Request.decode(messages[0])
+
+
+def test_a_client_that_never_sends_a_newline_is_cut_off() -> None:
+    """Aqui esta el motivo de que el limite se mire mientras se acumula.
+
+    Si se leyera sin tope hasta encontrar el salto de linea, el limite de
+    `Request.decode` no llegaria a comprobarse nunca, porque nunca habria un
+    mensaje que comprobar.
+    """
+    stream = MessageStream()
+
+    with pytest.raises(ProtocolError, match="sin terminar"):
+        stream.feed(b"a" * (MAX_REQUEST_BYTES + 1))
+
+
+def test_the_buffer_does_not_keep_growing_after_being_cut_off() -> None:
+    stream = MessageStream()
+
+    with pytest.raises(ProtocolError):
+        stream.feed(b"a" * (MAX_REQUEST_BYTES + 1))
+
+    assert stream.pending_bytes == 0
+
+
+def test_a_complete_message_over_the_limit_is_rejected() -> None:
+    stream = MessageStream()
+
+    with pytest.raises(ProtocolError, match="mas de"):
+        stream.feed(b"a" * (MAX_REQUEST_BYTES + 1) + b"\n")
+
+
+def test_a_message_exactly_at_the_limit_still_passes() -> None:
+    stream = MessageStream()
+
+    assert stream.feed(b"a" * MAX_REQUEST_BYTES + b"\n") == [b"a" * MAX_REQUEST_BYTES]
+
+
+def test_a_broken_stream_does_not_resync() -> None:
+    """Reengancharse tras la basura permitiria colar un mensaje detras de ella."""
+    stream = MessageStream()
+    with pytest.raises(ProtocolError):
+        stream.feed(b"a" * (MAX_REQUEST_BYTES + 1))
+
+    with pytest.raises(ProtocolError, match="venia roto"):
+        stream.feed(Request(command=Command.LIST).encode())
+
+
+def test_responses_need_their_own_limit() -> None:
+    """Un LIST con el catalogo entero pasa de largo el limite de una peticion."""
+    catalog = Response(
+        ok=True,
+        profiles=tuple(
+            ProfileSummary(
+                id=f"perfil-{index:03d}",
+                display_name=f"Perfil numero {index}",
+                tunnel_type=TunnelType.SPLIT,
+                state=ConnectionState.DISCONNECTED,
+                capabilities=(Capability.LAUNCH,),
+            )
+            for index in range(40)
+        ),
+    ).encode()
+
+    assert len(catalog) > MAX_REQUEST_BYTES
+    assert MessageStream(MAX_RESPONSE_BYTES).feed(catalog) == [catalog.removesuffix(b"\n")]
 
 
 def test_no_command_carries_free_text() -> None:

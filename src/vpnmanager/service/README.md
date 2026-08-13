@@ -7,9 +7,11 @@ procesos de VPN.
 
 - `main.py` — ciclo de vida del servicio.
 - `pipe.py` — servidor del named pipe, con ACL restringida a un grupo de AD.
-  Lee un mensaje, se lo da a `core.protocol.Request.decode`, y lo que salga de
-  ahí ya se puede tratar como válido. Un `ProtocolError` se convierte en una
-  respuesta de error genérica y **no se registra el mensaje recibido**.
+  Lo único que tiene que hacer con lo que lee es dárselo a
+  `core.protocol.MessageStream.feed()` y pasar cada mensaje por
+  `Request.decode()`. Lo que salga de ahí ya se puede tratar como válido. Un
+  `ProtocolError` cierra la conexión y se convierte en una respuesta de error
+  genérica; **el mensaje recibido no se registra**.
 - `watchdog.py` — antes de conectar un perfil `FULL`: guardar estado de red,
   armar temporizador (90 s por defecto) y conectar. Si la UI no confirma dentro
   de la ventana, deshacer y restaurar rutas y DNS. Lo que desarma el temporizador

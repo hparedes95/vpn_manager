@@ -46,6 +46,11 @@ PROTOCOL_VERSION: Final = 1
 # 64 caracteres.
 MAX_REQUEST_BYTES: Final = 4096
 
+# Las respuestas van en el otro sentido y son mucho mayores: un LIST lleva el
+# catalogo entero. El limite aqui no protege de un atacante —al otro lado esta
+# el servicio— sino de un flujo que se descuadre y crezca sin fin.
+MAX_RESPONSE_BYTES: Final = 256 * 1024
+
 
 class ProtocolError(Exception):
     """Mensaje que no se entiende o que no cumple el contrato.
@@ -236,6 +241,60 @@ class Response:
             manual_disconnect_first=tuple(_read_list_of_strings(data, "manual_disconnect_first")),
             warnings=tuple(_read_list_of_strings(data, "warnings")),
         )
+
+
+class MessageStream:
+    """Trocea en mensajes lo que va llegando por el pipe.
+
+    Un pipe es un flujo de bytes: lo que se lee no coincide con lo que se
+    escribio. Un mensaje puede llegar partido en tres trozos y tres mensajes
+    pueden llegar juntos.
+
+    Lo importante es **donde** se aplica el limite de tamano. Si se leyera sin
+    tope hasta encontrar un salto de linea, un cliente sin privilegios podria
+    mandar bytes para siempre sin mandar ninguno, y el limite de
+    `Request.decode` no llegaria a comprobarse nunca porque nunca habria un
+    mensaje que comprobar. Por eso el tope se mira mientras se acumula.
+
+    Pasado el limite, el flujo queda roto y no se recupera: reengancharse
+    despues de la basura permitiria colar un mensaje detras de ella. Quien lo
+    use tiene que cerrar la conexion.
+    """
+
+    def __init__(self, max_message_bytes: int = MAX_REQUEST_BYTES) -> None:
+        self._max = max_message_bytes
+        self._buffer = bytearray()
+        self._broken = False
+
+    @property
+    def pending_bytes(self) -> int:
+        """Lo que hay acumulado sin terminar en un mensaje."""
+        return len(self._buffer)
+
+    def feed(self, chunk: bytes) -> list[bytes]:
+        """Anade lo leido y devuelve los mensajes completos, sin el salto final."""
+        if self._broken:
+            raise ProtocolError("el flujo venia roto: hay que cerrar la conexion")
+
+        self._buffer.extend(chunk)
+        messages: list[bytes] = []
+        while (index := self._buffer.find(b"\n")) != -1:
+            message = bytes(self._buffer[:index])
+            del self._buffer[: index + 1]
+            if len(message) > self._max:
+                # Se descartan tambien los mensajes ya troceados en esta misma
+                # llamada: la conexion se va a cerrar de todas formas.
+                self._break(f"mensaje de mas de {self._max} bytes")
+            messages.append(message)
+
+        if len(self._buffer) > self._max:
+            self._break(f"mensaje sin terminar de mas de {self._max} bytes")
+        return messages
+
+    def _break(self, reason: str) -> None:
+        self._broken = True
+        self._buffer.clear()
+        raise ProtocolError(reason)
 
 
 # --------------------------------------------------------------------------
