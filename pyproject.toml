@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vpnmanager"
+version = "0.1.0"
+description = "Orquestador local de clientes VPN oficiales para Windows"
+requires-python = ">=3.12"
+# Sin dependencias de ejecucion todavia: el nucleo es logica pura. PySide6
+# entrara cuando exista la UI, y pywin32 cuando exista el servicio; ninguno
+# de los dos debe poder colarse en core/.
+dependencies = []
+
+[project.optional-dependencies]
+# Herramientas de desarrollo, no se distribuyen con la app:
+#   pytest -> tests del nucleo
+#   ruff   -> lint y formato en un solo binario, sin cadena de plugins
+#   mypy   -> el tipado que exige CLAUDE.md solo sirve si algo lo comprueba
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# pythonpath evita tener que instalar el paquete para lanzar los tests.
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]

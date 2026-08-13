@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Artefactos de empaquetado (PyInstaller onedir)
+*.spec.bak
+
+# Catalogo real de perfiles: nunca en el repositorio.
+# El de produccion vive firmado en %ProgramData%\VpnManager\profiles.json.
+profiles.json
+*.profiles.json
