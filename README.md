@@ -69,10 +69,14 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
   el puerto `ProcessLauncher` y el registro. Lógica pura, sin implementación de
   Windows todavía — ver la pregunta abierta en
   [`src/vpnmanager/connectors/README.md`](src/vpnmanager/connectors/README.md).
+- **`core/arbiter.py`, completado**: un solo túnel `FULL` a la vez, los `SPLIT`
+  conviven, los `APP` fuera del árbitro. Devuelve un `ConnectionPlan` —a quién
+  desconectar antes, si hace falta confirmación, si hay que armar el watchdog—
+  y no ejecuta nada.
 
-Pendiente, por orden: árbitro de túnel, protocolo del pipe, watchdog de
-reversión, carga y verificación del catálogo firmado, implementación de
-`ProcessLauncher` para Windows y los conectores por proveedor.
+Pendiente, por orden: protocolo del pipe, watchdog de reversión, carga y
+verificación del catálogo firmado, implementación de `ProcessLauncher` para
+Windows y los conectores por proveedor.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
