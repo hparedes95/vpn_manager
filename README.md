@@ -88,9 +88,14 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
   inyectado, sin hilos: el temporizador real y la restauración de red son del
   servicio.
 
-Pendiente, por orden: carga y verificación del catálogo firmado, servidor del
-pipe, implementación de `ProcessLauncher` para Windows y los conectores por
-proveedor.
+- **`security/catalog.py`, completado**: verificación de firma y lectura del
+  catálogo. No se parsea nada sin verificar antes, el verificador por defecto
+  rechaza todo, y o carga el catálogo entero o no carga nada. El esquema de
+  firma es un puerto sin implementar, a la espera de decidirlo. Ejemplo en
+  [`docs/profiles.example.json`](docs/profiles.example.json).
+
+Pendiente, por orden: servidor del pipe, implementación de `ProcessLauncher`
+para Windows y los conectores por proveedor. Los tres necesitan Windows.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.

@@ -13,6 +13,9 @@ Modulos vigilados:
 - todo `core/`, que es logica pura por definicion.
 - `connectors/base.py`, que define la interfaz y el conector minimo. Lo
   concreto de cada proveedor podra depender de Windows; el contrato no.
+- `security/catalog.py`, que lee y valida el catalogo firmado. Leer el fichero
+  de `%ProgramData%` con su ACL es del servicio; entender lo que pone, no, y
+  ese parser es el que mas falta hace poder machacar a tests.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src" / "vpnmanager"
 CORE = SRC / "core"
 CONNECTOR_BASE = SRC / "connectors" / "base.py"
+CATALOG = SRC / "security" / "catalog.py"
 
 # Modulos que atan un modulo puro a Windows, a la red o a un proceso externo.
 FORBIDDEN_MODULES = frozenset(
@@ -56,7 +60,7 @@ FORBIDDEN_MODULES = frozenset(
 # y ninguna capa puede depender de otra que este a su mismo nivel.
 LAYERS = frozenset({"connectors", "net", "security", "service", "ui"})
 
-PURE_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE]
+PURE_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG]
 
 
 def module_id(path: Path) -> str:
@@ -105,6 +109,7 @@ def test_the_modules_under_watch_exist() -> None:
     """Si algo se mueve de sitio, los tests de abajo pasarian por vacios."""
     assert CORE.is_dir()
     assert CONNECTOR_BASE.is_file()
+    assert CATALOG.is_file()
     assert len(PURE_MODULES) >= 3
 
 

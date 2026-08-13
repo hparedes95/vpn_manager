@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "wireguard-central",
+      "display_name": "WireGuard - central",
+      "connector": "wireguard",
+      "launch": {
+        "kind": "exe",
+        "target": "C:\\Program Files\\WireGuard\\wireguard.exe",
+        "args": ["/installtunnelservice"]
+      },
+      "tunnel_type": "full",
+      "target_networks": ["10.0.0.0/8"],
+      "probe_ip": "10.20.0.1",
+      "dns": ["10.0.0.53"],
+      "routes": ["10.0.0.0/8"],
+      "breaks_local_connectivity": true,
+      "disconnect_strategy": "cli",
+      "notes": "Tunel completo: corta la sesion RDP contra este equipo."
+    },
+    {
+      "id": "ivanti-cliente-b",
+      "display_name": "Ivanti - cliente B",
+      "connector": "ivanti",
+      "launch": {
+        "kind": "exe",
+        "target": "C:\\Program Files (x86)\\Common Files\\Pulse Secure\\Integration\\pulselauncher.exe"
+      },
+      "tunnel_type": "split",
+      "target_networks": ["172.16.4.0/24"],
+      "probe_ip": "172.16.4.1",
+      "routes": ["172.16.4.0/24"],
+      "post_connect_apps": [
+        { "kind": "exe", "target": "C:\\Windows\\System32\\mstsc.exe" }
+      ],
+      "expected_client_version": "22.6",
+      "disconnect_strategy": "none",
+      "notes": "Automatizacion sin verificar: hasta comprobarla, solo se abre el cliente."
+    },
+    {
+      "id": "azure-cliente-c",
+      "display_name": "Azure VPN - cliente C",
+      "connector": "azure",
+      "launch": {
+        "kind": "msix",
+        "target": "Microsoft.AzureVpn_8wekyb3d8bbwe!App"
+      },
+      "tunnel_type": "split",
+      "target_networks": ["10.90.0.0/16"],
+      "probe_ip": "10.90.0.4",
+      "notes": "App de Store: se lanza por Package Family Name, no por ruta."
+    },
+    {
+      "id": "iap-produccion",
+      "display_name": "IAP Desktop - produccion",
+      "connector": "iap",
+      "launch": {
+        "kind": "exe",
+        "target": "C:\\Program Files\\Google\\IAP Desktop\\IapDesktop.exe"
+      },
+      "tunnel_type": "app",
+      "target_networks": ["10.128.0.0/20"],
+      "notes": "No es una VPN: reenvio TCP por aplicacion. Sin rutas, sin DNS, fuera del arbitro."
+    }
+  ]
+}
