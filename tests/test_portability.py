@@ -16,6 +16,10 @@ Modulos vigilados:
 - `security/catalog.py`, que lee y valida el catalogo firmado. Leer el fichero
   de `%ProgramData%` con su ACL es del servicio; entender lo que pone, no, y
   ese parser es el que mas falta hace poder machacar a tests.
+- `service/orchestrator.py`, que ata las piezas. Este si puede importar de
+  varias capas —es la raiz de composicion— pero tampoco puede tocar Windows:
+  el flujo entero, incluida la reversion por falta de confirmacion, tiene que
+  poder probarse en CI.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "vpnmanager"
 CORE = SRC / "core"
 CONNECTOR_BASE = SRC / "connectors" / "base.py"
 CATALOG = SRC / "security" / "catalog.py"
+ORCHESTRATOR = SRC / "service" / "orchestrator.py"
 
 # Modulos que atan un modulo puro a Windows, a la red o a un proceso externo.
 FORBIDDEN_MODULES = frozenset(
@@ -60,7 +65,13 @@ FORBIDDEN_MODULES = frozenset(
 # y ninguna capa puede depender de otra que este a su mismo nivel.
 LAYERS = frozenset({"connectors", "net", "security", "service", "ui"})
 
-PURE_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG]
+# Ninguno de estos puede importar Windows ni red.
+PLATFORM_FREE_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG, ORCHESTRATOR]
+
+# Y estos, ademas, no pueden depender de otra capa. El orquestador queda fuera
+# a proposito: es la raiz de composicion, el sitio donde las piezas se juntan,
+# asi que conocerlas todas es su trabajo. Lo que no se le perdona es Windows.
+LAYERED_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG]
 
 
 def module_id(path: Path) -> str:
@@ -110,7 +121,8 @@ def test_the_modules_under_watch_exist() -> None:
     assert CORE.is_dir()
     assert CONNECTOR_BASE.is_file()
     assert CATALOG.is_file()
-    assert len(PURE_MODULES) >= 3
+    assert ORCHESTRATOR.is_file()
+    assert len(PLATFORM_FREE_MODULES) >= 4
 
 
 # Los tres tests siguientes prueban al guardian, no al codigo: un guardian que
@@ -166,7 +178,7 @@ def test_guard_accepts_what_a_pure_module_may_import(source: str) -> None:
 # Y estos, al codigo.
 
 
-@pytest.mark.parametrize("module_path", PURE_MODULES, ids=module_id)
+@pytest.mark.parametrize("module_path", PLATFORM_FREE_MODULES, ids=module_id)
 def test_pure_module_imports_nothing_platform_specific(module_path: Path) -> None:
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
@@ -178,7 +190,7 @@ def test_pure_module_imports_nothing_platform_specific(module_path: Path) -> Non
     )
 
 
-@pytest.mark.parametrize("module_path", PURE_MODULES, ids=module_id)
+@pytest.mark.parametrize("module_path", LAYERED_MODULES, ids=module_id)
 def test_pure_module_does_not_depend_on_other_layers(module_path: Path) -> None:
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
 

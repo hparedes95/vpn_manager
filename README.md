@@ -94,8 +94,23 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
   firma es un puerto sin implementar, a la espera de decidirlo. Ejemplo en
   [`docs/profiles.example.json`](docs/profiles.example.json).
 
-Pendiente, por orden: servidor del pipe, implementación de `ProcessLauncher`
-para Windows y los conectores por proveedor. Los tres necesitan Windows.
+- **`service/orchestrator.py`, completado**: la pieza que ata las demás. Recibe
+  una petición, consulta al árbitro, arma el watchdog, habla con el conector y
+  devuelve una respuesta. El recorrido entero —incluida la reversión cuando
+  nadie confirma— se prueba en CI, con la red y los clientes tras dos puertos
+  que implementará `net/`.
+
+**Todo lo que se puede escribir sin un Windows delante está escrito.** Lo que
+queda son adaptadores de plataforma y dos decisiones pendientes:
+
+| Falta | Bloqueado por |
+|---|---|
+| `ProcessLauncher` de Windows | Decidir quién lanza el cliente (ver [`connectors/README.md`](src/vpnmanager/connectors/README.md)) |
+| `CatalogVerifier` de verdad | Decidir el esquema de firma |
+| `net/` con sus `.ps1` y la sonda | Windows |
+| Servidor del pipe con ACL | Windows y el grupo de AD |
+| UI PySide6 | — |
+| Verificar `docs/CONECTORES.md` | Un puesto real con los clientes |
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
