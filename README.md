@@ -83,9 +83,14 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
   Gramática cerrada en la que no cabe una ruta ni un argumento, decodificador
   estricto y errores que nunca repiten lo recibido.
 
-Pendiente, por orden: watchdog de reversión, carga y verificación del catálogo
-firmado, servidor del pipe, implementación de `ProcessLauncher` para Windows y
-los conectores por proveedor.
+- **`core/watchdog.py`, completado**: la ventana de 90 s que deshace una
+  conexión que la interfaz no confirma. Máquina de estados sobre un reloj
+  inyectado, sin hilos: el temporizador real y la restauración de red son del
+  servicio.
+
+Pendiente, por orden: carga y verificación del catálogo firmado, servidor del
+pipe, implementación de `ProcessLauncher` para Windows y los conectores por
+proveedor.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
