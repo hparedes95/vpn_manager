@@ -27,12 +27,14 @@ es una escalada de privilegios local: el servicio corre en SYSTEM.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
 from vpnmanager.core.models import (
     Capability,
     ConnectionState,
+    DisconnectStrategy,
     LaunchSpec,
     Profile,
     Result,
@@ -196,11 +198,14 @@ class LauncherConnector(Connector):
             return Result.failure(
                 f"no se pudo abrir el cliente de '{profile.display_name}'{detail}"
             )
-        return Result(
-            ok=True,
+        return Result.success(
             state=ConnectionState.LAUNCHING,
             message=f"cliente de '{profile.display_name}' abierto; "
             f"completa la conexion en su propia ventana",
+            # Puede venir vacio: una app MSIX se lanza por el shell y no
+            # devuelve un pid utilizable. Quien dependa de el debe contar con
+            # que no siempre esta.
+            pid=outcome.pid,
         )
 
 
@@ -237,6 +242,33 @@ class ConnectorRegistry:
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._connectors))
+
+    def validate_catalog(self, profiles: Iterable[Profile]) -> list[str]:
+        """Comprueba que los conectores registrados pueden cumplir el catalogo.
+
+        Un perfil describe lo que quiere; un conector, lo que puede. Nadie
+        cruzaba las dos cosas: un perfil con `DisconnectStrategy.CLI` gobernado
+        por un conector que no declara `DISCONNECT` pasa la validacion del
+        perfil, pasa la del conector, y falla el dia que alguien pulsa
+        desconectar. Se llama al cargar el catalogo, no en caliente.
+        """
+        issues: list[str] = []
+        for profile in profiles:
+            connector = self._connectors.get(profile.connector)
+            if connector is None:
+                issues.append(
+                    f"perfil '{profile.id}': no hay ningun conector registrado como "
+                    f"'{profile.connector}'"
+                )
+                continue
+            if profile.disconnect_strategy is DisconnectStrategy.CLI and not connector.supports(
+                Capability.DISCONNECT
+            ):
+                issues.append(
+                    f"perfil '{profile.id}': pide desconexion por CLI y el conector "
+                    f"'{connector.name}' no declara DISCONNECT"
+                )
+        return issues
 
     def __contains__(self, name: str) -> bool:
         return name in self._connectors

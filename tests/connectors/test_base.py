@@ -19,6 +19,7 @@ from vpnmanager.connectors.base import (
 from vpnmanager.core.models import (
     Capability,
     ConnectionState,
+    DisconnectStrategy,
     LaunchKind,
     LaunchSpec,
     Profile,
@@ -66,6 +67,7 @@ def make_profile(
     connector: str = "wireguard",
     launch: LaunchSpec | None = None,
     probe_ip: str | None = "10.20.0.1",
+    disconnect_strategy: DisconnectStrategy = DisconnectStrategy.NONE,
 ) -> Profile:
     return Profile(
         id=profile_id,
@@ -74,6 +76,7 @@ def make_profile(
         launch=LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE) if launch is None else launch,
         tunnel_type=TunnelType.FULL,
         probe_ip=probe_ip,
+        disconnect_strategy=disconnect_strategy,
     )
 
 
@@ -155,6 +158,24 @@ def test_launch_does_not_claim_the_profile_is_connected(connector: LauncherConne
     result = connector.launch(make_profile())
 
     assert result.state is ConnectionState.LAUNCHING
+
+
+def test_launch_hands_back_the_pid(connector: LauncherConnector) -> None:
+    """Lo necesitara DisconnectStrategy.TERMINATE; si se pierde aqui, no hay otro."""
+    result = connector.launch(make_profile())
+
+    assert result.pid == 4242
+
+
+def test_launch_without_a_pid_is_still_a_success(launcher: FakeLauncher) -> None:
+    """Una app MSIX se lanza por el shell: arranca, pero no da un pid utilizable."""
+    launcher.outcome = LaunchOutcome(started=True, pid=None)
+    connector = LauncherConnector(name="wireguard", launcher=launcher)
+
+    result = connector.launch(make_profile())
+
+    assert result.ok
+    assert result.pid is None
 
 
 def test_launch_reports_the_launcher_failure(launcher: FakeLauncher) -> None:
@@ -345,6 +366,66 @@ def test_empty_registry_resolves_nothing() -> None:
     assert len(registry) == 0
     assert registry.names() == ()
     assert registry.for_profile(make_profile()) is None
+
+
+# --------------------------------------------------------------------------
+# El catalogo frente a lo que los conectores pueden de verdad
+# --------------------------------------------------------------------------
+
+
+def test_catalog_validation_accepts_a_coherent_catalog(launcher: FakeLauncher) -> None:
+    registry = ConnectorRegistry()
+    registry.register(ObedientConnector(name="wireguard", launcher=launcher))
+
+    assert registry.validate_catalog([make_profile()]) == []
+
+
+def test_a_profile_governed_by_nobody_is_reported(connector: LauncherConnector) -> None:
+    registry = ConnectorRegistry()
+    registry.register(connector)
+
+    issues = registry.validate_catalog([make_profile(connector="forcepoint")])
+
+    assert any("forcepoint" in issue for issue in issues)
+
+
+def test_a_profile_asking_for_a_disconnect_nobody_implements_is_reported(
+    connector: LauncherConnector,
+) -> None:
+    """Pasa la validacion del perfil, pasa la del conector, y falla al desconectar."""
+    registry = ConnectorRegistry()
+    registry.register(connector)
+    profile = make_profile(disconnect_strategy=DisconnectStrategy.CLI)
+
+    issues = registry.validate_catalog([profile])
+
+    assert any("no declara DISCONNECT" in issue for issue in issues)
+
+
+@pytest.mark.parametrize("strategy", [DisconnectStrategy.NONE, DisconnectStrategy.TERMINATE])
+def test_strategies_that_do_not_need_the_client_are_accepted(
+    connector: LauncherConnector, strategy: DisconnectStrategy
+) -> None:
+    """NONE no desconecta nada y TERMINATE mata el proceso: ninguna pide permiso."""
+    registry = ConnectorRegistry()
+    registry.register(connector)
+
+    assert registry.validate_catalog([make_profile(disconnect_strategy=strategy)]) == []
+
+
+def test_catalog_validation_reports_every_profile(connector: LauncherConnector) -> None:
+    registry = ConnectorRegistry()
+    registry.register(connector)
+
+    issues = registry.validate_catalog(
+        [
+            make_profile(profile_id="a", connector="forcepoint"),
+            make_profile(profile_id="b", disconnect_strategy=DisconnectStrategy.CLI),
+            make_profile(profile_id="c"),
+        ]
+    )
+
+    assert len(issues) == 2
 
 
 def test_connector_is_abstract() -> None:

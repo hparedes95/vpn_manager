@@ -18,7 +18,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from vpnmanager.core.models import ConnectionState, Profile, Session, TunnelType
+from vpnmanager.core.models import (
+    ConnectionState,
+    DisconnectStrategy,
+    Profile,
+    Session,
+    TunnelType,
+)
 
 
 # Un perfil ocupa la maquina mientras no este limpiamente desconectado. Un
@@ -45,9 +51,14 @@ class ConnectionPlan:
 
     profile_id: str
     disconnect_first: tuple[str, ...] = ()
+    # Tuneles que estorban y que nadie sabe desconectar solo. Van siempre en
+    # un plan rechazado: son la lista que la interfaz le enseña al usuario
+    # para que los cierre a mano.
+    manual_disconnect_first: tuple[str, ...] = ()
     needs_confirmation: bool = False
     confirmation_reason: str = ""
     needs_watchdog: bool = False
+    warnings: tuple[str, ...] = ()
     refusal: str = ""
 
     @property
@@ -55,8 +66,16 @@ class ConnectionPlan:
         return not self.refusal
 
     @staticmethod
-    def refused(profile_id: str, reason: str) -> ConnectionPlan:
-        return ConnectionPlan(profile_id=profile_id, refusal=reason)
+    def refused(
+        profile_id: str,
+        reason: str,
+        manual_disconnect_first: tuple[str, ...] = (),
+    ) -> ConnectionPlan:
+        return ConnectionPlan(
+            profile_id=profile_id,
+            manual_disconnect_first=manual_disconnect_first,
+            refusal=reason,
+        )
 
 
 class TunnelArbiter:
@@ -96,12 +115,23 @@ class TunnelArbiter:
                     f"no se puede saber si es un tunel completo",
                 )
 
+        conflicting = self._conflicting_tunnels(target, live)
+        automatic, manual = self._split_by_disconnect_strategy(conflicting)
+        if manual:
+            return ConnectionPlan.refused(
+                profile_id,
+                f"antes hay que desconectar a mano, desde su propio cliente: "
+                f"{', '.join(self._display_names(manual))}",
+                manual_disconnect_first=manual,
+            )
+
         return ConnectionPlan(
             profile_id=profile_id,
-            disconnect_first=self._conflicting_tunnels(target, live),
+            disconnect_first=automatic,
             needs_confirmation=target.breaks_local_connectivity,
             confirmation_reason=self._confirmation_reason(target),
             needs_watchdog=target.tunnel_type is TunnelType.FULL,
+            warnings=self._warnings(target, live),
         )
 
     # -- Interno -----------------------------------------------------------
@@ -151,6 +181,46 @@ class TunnelArbiter:
         # Puede haber dos sesiones del mismo perfil si el estado se ha
         # descuadrado; se desconecta una vez, en el orden en que llegaron.
         return tuple(dict.fromkeys(conflicting))
+
+    def _split_by_disconnect_strategy(
+        self, profile_ids: tuple[str, ...]
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Separa lo que el servicio puede desconectar de lo que no.
+
+        Un perfil con `DisconnectStrategy.NONE` es un cliente que no expone
+        ninguna forma de pedirle que se desconecte —tipico con SSO—. Meterlo
+        en `disconnect_first` seria escribir un plan que el servicio no puede
+        cumplir, y el precio de intentarlo es dos tuneles completos a la vez.
+        """
+        automatic: list[str] = []
+        manual: list[str] = []
+        for profile_id in profile_ids:
+            profile = self._catalog[profile_id]
+            if profile.disconnect_strategy is DisconnectStrategy.NONE:
+                manual.append(profile_id)
+            else:
+                automatic.append(profile_id)
+        return tuple(automatic), tuple(manual)
+
+    def _warnings(self, target: Profile, sessions: list[Session]) -> tuple[str, ...]:
+        """Lo que se deja conectar pero probablemente no haga lo que se espera."""
+        if target.tunnel_type is not TunnelType.SPLIT:
+            return ()
+        blocking = [
+            session.profile_id
+            for session in sessions
+            if is_occupying(session) and self._is_full(session.profile_id)
+        ]
+        if not blocking:
+            return ()
+        return (
+            f"'{target.display_name}' es un tunel parcial y "
+            f"{', '.join(self._display_names(tuple(blocking)))} captura todo el trafico: "
+            f"sus rutas quedan por debajo y no encaminan nada",
+        )
+
+    def _display_names(self, profile_ids: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(f"'{self._catalog[profile_id].display_name}'" for profile_id in profile_ids)
 
     def _is_full(self, profile_id: str) -> bool:
         profile = self._catalog.get(profile_id)

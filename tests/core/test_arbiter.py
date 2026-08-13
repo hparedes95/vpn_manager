@@ -15,6 +15,7 @@ import pytest
 from vpnmanager.core.arbiter import ConnectionPlan, TunnelArbiter, is_occupying
 from vpnmanager.core.models import (
     ConnectionState,
+    DisconnectStrategy,
     LaunchKind,
     LaunchSpec,
     Profile,
@@ -32,6 +33,7 @@ def make_profile(
     breaks_local_connectivity: bool = False,
     launch: LaunchSpec | None = None,
     probe_ip: str | None = "10.20.0.1",
+    disconnect_strategy: DisconnectStrategy = DisconnectStrategy.CLI,
 ) -> Profile:
     return Profile(
         id=profile_id,
@@ -41,12 +43,19 @@ def make_profile(
         tunnel_type=tunnel_type,
         probe_ip=None if tunnel_type is TunnelType.APP else probe_ip,
         breaks_local_connectivity=breaks_local_connectivity,
+        disconnect_strategy=disconnect_strategy,
     )
 
 
 FULL_A = make_profile("full-a", TunnelType.FULL)
 FULL_B = make_profile("full-b", TunnelType.FULL)
 FULL_RDP = make_profile("full-rdp", TunnelType.FULL, breaks_local_connectivity=True)
+FULL_KILL = make_profile(
+    "full-kill", TunnelType.FULL, disconnect_strategy=DisconnectStrategy.TERMINATE
+)
+# El caso incomodo: un cliente con SSO que no expone ninguna forma de pedirle
+# que se desconecte. Es la razon de ser de DisconnectStrategy.NONE.
+FULL_SSO = make_profile("full-sso", TunnelType.FULL, disconnect_strategy=DisconnectStrategy.NONE)
 SPLIT_A = make_profile("split-a", TunnelType.SPLIT)
 SPLIT_B = make_profile("split-b", TunnelType.SPLIT)
 APP_IAP = make_profile("app-iap", TunnelType.APP)
@@ -56,7 +65,10 @@ BROKEN = make_profile(
     launch=LaunchSpec(kind=LaunchKind.EXE, target=r"C:\temp\conectar.bat"),
 )
 
-CATALOG = {p.id: p for p in (FULL_A, FULL_B, FULL_RDP, SPLIT_A, SPLIT_B, APP_IAP, BROKEN)}
+CATALOG = {
+    p.id: p
+    for p in (FULL_A, FULL_B, FULL_RDP, FULL_KILL, FULL_SSO, SPLIT_A, SPLIT_B, APP_IAP, BROKEN)
+}
 
 
 @pytest.fixture
@@ -213,6 +225,91 @@ def test_a_repeated_session_is_only_disconnected_once(arbiter: TunnelArbiter) ->
     )
 
     assert plan.disconnect_first == ("full-a",)
+
+
+# --------------------------------------------------------------------------
+# Tuneles que nadie sabe desconectar solo
+# --------------------------------------------------------------------------
+
+
+def test_a_full_that_cannot_be_disconnected_blocks_the_connection(arbiter: TunnelArbiter) -> None:
+    """Planificar una desconexion que el servicio no puede ejecutar seria mentir.
+
+    Y el precio de intentarlo son dos tuneles completos a la vez, que es justo
+    lo que el arbitro existe para impedir. Se rechaza y se dice cual cerrar.
+    """
+    plan = arbiter.plan_connection("full-a", [session("full-sso")])
+
+    assert not plan.allowed
+    assert plan.manual_disconnect_first == ("full-sso",)
+    assert "a mano" in plan.refusal
+    assert "Perfil full-sso" in plan.refusal
+
+
+def test_nothing_is_disconnected_when_the_plan_cannot_be_completed(
+    arbiter: TunnelArbiter,
+) -> None:
+    """Si hay que parar de todos modos, no se deja al usuario a medias."""
+    plan = arbiter.plan_connection("full-a", [session("full-b"), session("full-sso")])
+
+    assert not plan.allowed
+    assert plan.disconnect_first == ()
+    assert plan.manual_disconnect_first == ("full-sso",)
+
+
+@pytest.mark.parametrize("profile_id", ["full-b", "full-kill"])
+def test_a_full_that_can_be_disconnected_does_not_block_anything(
+    arbiter: TunnelArbiter, profile_id: str
+) -> None:
+    """CLI y TERMINATE son automatizables; NONE es el unico que no."""
+    plan = arbiter.plan_connection("full-a", [session(profile_id)])
+
+    assert plan.allowed
+    assert plan.disconnect_first == (profile_id,)
+    assert plan.manual_disconnect_first == ()
+
+
+def test_a_split_is_not_blocked_by_an_undisconnectable_full(arbiter: TunnelArbiter) -> None:
+    """Un SPLIT no echa a nadie, asi que tampoco le estorba nadie."""
+    plan = arbiter.plan_connection("split-a", [session("full-sso")])
+
+    assert plan.allowed
+
+
+# --------------------------------------------------------------------------
+# Avisos: se deja hacer, pero probablemente no haga lo que se espera
+# --------------------------------------------------------------------------
+
+
+def test_a_split_under_a_full_is_warned_about(arbiter: TunnelArbiter) -> None:
+    """Conviven, dice la especificacion. Pero el FULL captura todo el trafico."""
+    plan = arbiter.plan_connection("split-a", [session("full-a")])
+
+    assert plan.allowed
+    assert len(plan.warnings) == 1
+    assert "no encaminan nada" in plan.warnings[0]
+    assert "Perfil full-a" in plan.warnings[0]
+
+
+def test_a_split_without_a_full_active_gets_no_warning(arbiter: TunnelArbiter) -> None:
+    plan = arbiter.plan_connection("split-a", [session("split-b"), session("app-iap")])
+
+    assert plan.warnings == ()
+
+
+def test_a_disconnected_full_does_not_warn_a_split(arbiter: TunnelArbiter) -> None:
+    plan = arbiter.plan_connection("split-a", [session("full-a", ConnectionState.DISCONNECTED)])
+
+    assert plan.warnings == ()
+
+
+@pytest.mark.parametrize("profile_id", ["full-b", "app-iap"])
+def test_only_a_split_gets_the_shadowed_routes_warning(
+    arbiter: TunnelArbiter, profile_id: str
+) -> None:
+    plan = arbiter.plan_connection(profile_id, [session("full-a")])
+
+    assert plan.warnings == ()
 
 
 # --------------------------------------------------------------------------

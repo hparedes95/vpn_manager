@@ -72,7 +72,12 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
 - **`core/arbiter.py`, completado**: un solo túnel `FULL` a la vez, los `SPLIT`
   conviven, los `APP` fuera del árbitro. Devuelve un `ConnectionPlan` —a quién
   desconectar antes, si hace falta confirmación, si hay que armar el watchdog—
-  y no ejecuta nada.
+  y no ejecuta nada. Si lo que estorba es un cliente que no se sabe desconectar
+  solo, rechaza el plan y dice cuál hay que cerrar a mano.
+- **Validación del catálogo, completada**: rutas de binario absolutas y fuera de
+  recursos de red, `post_connect_apps` sometidas al mismo filtro que el cliente,
+  y formato comprobado de IPs y CIDR antes de que ningún valor llegue a un
+  `.ps1` ejecutado como SYSTEM.
 
 Pendiente, por orden: protocolo del pipe, watchdog de reversión, carga y
 verificación del catálogo firmado, implementación de `ProcessLauncher` para

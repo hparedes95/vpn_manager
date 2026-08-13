@@ -77,10 +77,20 @@ Las dos salidas razonables:
 `base.py` vale igual con cualquiera de las dos: lo que cambia es quién
 implementa `ProcessLauncher` y en qué proceso vive.
 
-## Limitación conocida: el pid
+## El catálogo frente a lo que los conectores pueden de verdad
 
-`Connector.launch()` devuelve un `Result`, y `Result` no tiene dónde llevar el
-pid que sí devuelve `LaunchOutcome`. Hoy no bloquea nada porque ningún conector
-declara `DISCONNECT`, pero `DisconnectStrategy.TERMINATE` necesitará ese pid.
-Cuando llegue el momento habrá que añadir el campo a `Result` o dejar que el
-servicio actualice la `Session`, y eso es un cambio en `core/`.
+`ConnectorRegistry.validate_catalog(profiles)` cruza las dos mitades: un perfil
+describe lo que quiere, un conector lo que puede. Un perfil con
+`DisconnectStrategy.CLI` gobernado por un conector que no declara `DISCONNECT`
+pasa la validación del perfil, pasa la del conector, y falla el día que alguien
+pulsa desconectar. Se llama al cargar el catálogo, no en caliente.
+
+`TERMINATE` y `NONE` no piden nada al cliente —una mata el proceso, la otra no
+desconecta— así que no exigen capacidad ninguna.
+
+## El pid
+
+`Result` lleva `pid`, que `LauncherConnector` rellena con lo que devuelva el
+lanzador. Puede venir vacío y hay que contar con ello: una app MSIX se lanza por
+el shell y no da un pid utilizable, así que `DisconnectStrategy.TERMINATE` nunca
+será una opción para el Azure VPN Client.

@@ -25,6 +25,8 @@ from vpnmanager.core.models import (
     Result,
     Session,
     TunnelType,
+    is_ip_address,
+    is_network,
 )
 
 WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
@@ -91,6 +93,48 @@ def test_empty_exe_target_reports_both_issues() -> None:
     assert len(issues) == 2
     assert mentions(issues, "target vacio")
     assert mentions(issues, "debe apuntar a un .exe")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "wireguard.exe",  # se resolveria contra el directorio de trabajo
+        r"bin\wireguard.exe",
+        r"C:wireguard.exe",  # relativa al directorio actual de la unidad C:
+        r"..\wireguard.exe",
+    ],
+)
+def test_relative_exe_target_is_rejected(target: str) -> None:
+    """Lo ejecuta un servicio en SYSTEM: donde esta el binario importa.
+
+    Una ruta relativa se resuelve contra el directorio de trabajo del
+    servicio, y ahi un usuario sin privilegios puede dejar su propio
+    `wireguard.exe`.
+    """
+    issues = exe_spec(target).validate()
+
+    assert mentions(issues, "debe ser una ruta absoluta")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        r"\\servidor\reparto\vpn\wireguard.exe",
+        r"\\10.0.0.9\share\openvpn-gui.exe",
+    ],
+)
+def test_exe_target_on_a_network_share_is_rejected(target: str) -> None:
+    """Un recurso de red lo controla quien controle ese servidor, no nosotros."""
+    issues = exe_spec(target).validate()
+
+    assert mentions(issues, "recurso de red")
+
+
+def test_a_bad_extension_is_reported_without_piling_on_the_path_rules() -> None:
+    """Un solo problema, un solo mensaje: el .bat no es ademas 'ruta relativa'."""
+    issues = exe_spec("conectar.bat").validate()
+
+    assert issues == ["un target EXE debe apuntar a un .exe"]
 
 
 def test_valid_msix_spec_has_no_issues() -> None:
@@ -225,6 +269,174 @@ def test_profile_is_immutable() -> None:
         profile.launch = exe_spec(r"C:\temp\otro.exe")  # type: ignore[misc]
 
 
+def test_profile_without_display_name_is_rejected() -> None:
+    issues = Profile(
+        id="wireguard-corp",
+        display_name="",
+        connector="wireguard",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.FULL,
+        probe_ip="10.20.0.1",
+    ).validate()
+
+    assert mentions(issues, "display_name vacio")
+
+
+def test_profile_without_connector_is_rejected() -> None:
+    issues = Profile(
+        id="wireguard-corp",
+        display_name="WireGuard corporativa",
+        connector="",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.FULL,
+        probe_ip="10.20.0.1",
+    ).validate()
+
+    assert mentions(issues, "connector vacio")
+
+
+def test_post_connect_apps_pass_the_same_filter_as_the_client() -> None:
+    """Las lanza el mismo servicio en SYSTEM: mismo filtro, sin excepciones."""
+    profile = Profile(
+        id="ivanti-cliente-b",
+        display_name="Ivanti cliente B",
+        connector="ivanti",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.SPLIT,
+        probe_ip="172.16.4.1",
+        post_connect_apps=(
+            exe_spec(r"C:\Windows\System32\mstsc.exe"),
+            exe_spec(r"C:\temp\script.bat"),
+        ),
+    )
+
+    issues = profile.validate()
+
+    assert mentions(issues, "post_connect_apps[1]")
+    assert mentions(issues, "debe apuntar a un .exe")
+    assert not mentions(issues, "post_connect_apps[0]")
+
+
+def test_app_profile_with_dns_is_rejected() -> None:
+    """IAP Desktop no aplica DNS, igual que no aplica rutas."""
+    issues = Profile(
+        id="iap-produccion",
+        display_name="IAP produccion",
+        connector="iap",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.APP,
+        dns=("10.0.0.53",),
+    ).validate()
+
+    assert mentions(issues, "no debe aplicar DNS")
+
+
+def test_app_profile_may_declare_target_networks() -> None:
+    """`target_networks` es descriptivo, no se aplica: dice a donde se llega."""
+    issues = Profile(
+        id="iap-produccion",
+        display_name="IAP produccion",
+        connector="iap",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.APP,
+        target_networks=("10.128.0.0/20",),
+    ).validate()
+
+    assert issues == []
+
+
+@pytest.mark.parametrize("value", ["10.20.0", "no-soy-una-ip", "10.20.0.1/32", "300.1.1.1", ""])
+def test_malformed_probe_ip_is_rejected(value: str) -> None:
+    issues = make_profile(probe_ip=value).validate()
+
+    assert mentions(issues, "no es una IP")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "10.0.0.0/8",
+        "192.168.1.0/24",
+        "172.16.4.7",  # una ruta a un solo host es un /32 valido
+        "fd00::/8",
+    ],
+)
+def test_well_formed_networks_are_accepted(value: str) -> None:
+    assert make_profile(routes=(value,)).validate() == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "10.0.0.0/33",
+        "10.0.0.5/8",  # bits de host puestos: siempre es una errata
+        "10.0.0.0-10.0.0.255",
+        "toda-la-oficina",
+    ],
+)
+def test_malformed_routes_are_rejected(value: str) -> None:
+    """Estos valores acabarian como parametro de un .ps1 ejecutado en SYSTEM."""
+    issues = make_profile(routes=(value,)).validate()
+
+    assert mentions(issues, "routes:")
+    assert mentions(issues, "formato CIDR")
+
+
+def test_malformed_target_networks_are_rejected() -> None:
+    profile = Profile(
+        id="wireguard-corp",
+        display_name="WireGuard corporativa",
+        connector="wireguard",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.FULL,
+        probe_ip="10.20.0.1",
+        target_networks=("10.0.0.0/8", "la-central"),
+    )
+
+    issues = profile.validate()
+
+    assert mentions(issues, "target_networks: 'la-central'")
+
+
+def test_malformed_dns_is_rejected() -> None:
+    profile = Profile(
+        id="wireguard-corp",
+        display_name="WireGuard corporativa",
+        connector="wireguard",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.FULL,
+        probe_ip="10.20.0.1",
+        dns=("10.0.0.53", "dns.interno.local"),
+    )
+
+    issues = profile.validate()
+
+    assert mentions(issues, "dns: 'dns.interno.local'")
+    assert not mentions(issues, "10.0.0.53")
+
+
+def test_a_fully_populated_profile_validates() -> None:
+    """El perfil realista completo, para que las reglas nuevas no se pasen de listas."""
+    profile = Profile(
+        id="wireguard-corp",
+        display_name="WireGuard corporativa",
+        connector="wireguard",
+        launch=exe_spec(),
+        tunnel_type=TunnelType.FULL,
+        target_networks=("10.0.0.0/8", "fd00::/8"),
+        probe_ip="10.20.0.1",
+        dns=("10.0.0.53", "fd00::53"),
+        routes=("10.0.0.0/8",),
+        post_connect_apps=(exe_spec(r"C:\Windows\System32\mstsc.exe"),),
+        expected_client_version="0.5.3",
+        breaks_local_connectivity=True,
+        disconnect_strategy=DisconnectStrategy.CLI,
+        notes="tunel principal de la central",
+    )
+
+    assert profile.validate() == []
+
+
 def test_profile_accepts_post_connect_apps() -> None:
     profile = Profile(
         id="ivanti-cliente-b",
@@ -295,6 +507,27 @@ def test_result_message_is_optional() -> None:
     assert result.message == ""
 
 
+def test_success_result_carries_the_state_and_the_pid() -> None:
+    result = Result.success(ConnectionState.LAUNCHING, "cliente abierto", pid=4242)
+
+    assert result.ok is True
+    assert result.state is ConnectionState.LAUNCHING
+    assert result.pid == 4242
+
+
+def test_success_result_without_a_pid() -> None:
+    """Una app MSIX se lanza por el shell y no devuelve un pid utilizable."""
+    result = Result.success(ConnectionState.LAUNCHING)
+
+    assert result.ok is True
+    assert result.pid is None
+    assert result.message == ""
+
+
+def test_failure_result_has_no_pid() -> None:
+    assert Result.failure("no se pudo abrir").pid is None
+
+
 def test_result_is_immutable() -> None:
     result = Result.failure("fallo")
 
@@ -331,6 +564,37 @@ def test_disconnect_strategy_values_are_stable() -> None:
         "CLI": "cli",
         "TERMINATE": "terminate",
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "valid"),
+    [
+        ("10.20.0.1", True),
+        ("fd00::53", True),
+        ("0.0.0.0", True),
+        ("10.20.0.1/32", False),
+        ("10.20.0", False),
+        ("", False),
+        (" 10.20.0.1", False),
+    ],
+)
+def test_ip_address_parser(value: str, valid: bool) -> None:
+    assert is_ip_address(value) is valid
+
+
+@pytest.mark.parametrize(
+    ("value", "valid"),
+    [
+        ("10.0.0.0/8", True),
+        ("172.16.4.7", True),
+        ("fd00::/8", True),
+        ("10.0.0.5/8", False),
+        ("10.0.0.0/33", False),
+        ("", False),
+    ],
+)
+def test_network_parser(value: str, valid: bool) -> None:
+    assert is_network(value) is valid
 
 
 def test_connection_state_values_are_stable() -> None:
