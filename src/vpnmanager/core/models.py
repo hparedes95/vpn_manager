@@ -7,9 +7,21 @@ testeable en CI sin un cliente VPN instalado.
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import PureWindowsPath
+
+# El id de un perfil es lo unico que viaja de la interfaz al servicio. Se
+# restringe aqui, en el modelo, para que el catalogo y el protocolo del pipe
+# no puedan discrepar: si el pipe aceptase menos que el catalogo, habria
+# perfiles inalcanzables; si aceptase mas, seria un agujero.
+PROFILE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def is_valid_profile_id(value: str) -> bool:
+    return PROFILE_ID_PATTERN.match(value) is not None
+
 
 # `ipaddress` y `PureWindowsPath` solo parsean: no resuelven nombres, no tocan
 # red y no miran el disco. Se comportan igual en el runner de Linux que en un
@@ -148,6 +160,10 @@ class Profile:
         issues = list(self.launch.validate())
         if not self.id:
             issues.append("id vacio")
+        elif not is_valid_profile_id(self.id):
+            issues.append(
+                "el id solo admite letras, digitos, punto, guion y guion bajo, hasta 64 caracteres"
+            )
         if not self.display_name:
             issues.append("display_name vacio: la interfaz no tendria como llamarlo")
         if not self.connector:

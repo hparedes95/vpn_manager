@@ -79,9 +79,13 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
   y formato comprobado de IPs y CIDR antes de que ningún valor llegue a un
   `.ps1` ejecutado como SYSTEM.
 
-Pendiente, por orden: protocolo del pipe, watchdog de reversión, carga y
-verificación del catálogo firmado, implementación de `ProcessLauncher` para
-Windows y los conectores por proveedor.
+- **`core/protocol.py`, completado**: el contrato entre los dos procesos.
+  Gramática cerrada en la que no cabe una ruta ni un argumento, decodificador
+  estricto y errores que nunca repiten lo recibido.
+
+Pendiente, por orden: watchdog de reversión, carga y verificación del catálogo
+firmado, servidor del pipe, implementación de `ProcessLauncher` para Windows y
+los conectores por proveedor.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
