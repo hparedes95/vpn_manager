@@ -40,9 +40,10 @@ pytest                  # tests
 ```
 
 El núcleo se testea **en Linux**, sin Windows y sin ningún cliente VPN instalado.
-No es casualidad: `tests/core/test_core_is_portable.py` lee el AST de cada módulo
-de `core/` y falla si aparece un import de Windows, de red, o de una capa de
-fuera. Si ese test se vuelve incómodo, el problema es el código que lo incomoda.
+No es casualidad: `tests/test_portability.py` lee el AST de cada módulo de `core/`
+y de `connectors/base.py`, y falla si aparece un import de Windows, de red, o de
+otra capa. Si ese test se vuelve incómodo, el problema es el código que lo
+incomoda.
 
 ## Estructura
 
@@ -62,12 +63,16 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
 
 ## Estado
 
-Fase 4 (entorno), **completada**: estructura, empaquetado, lint, tipado, tests y
-CI en verde sobre `core/models.py`.
+- **Fase 4 (entorno), completada**: estructura, empaquetado, lint, tipado
+  estricto, tests y CI.
+- **`connectors/base.py`, completado**: interfaz de conector, `LauncherConnector`,
+  el puerto `ProcessLauncher` y el registro. Lógica pura, sin implementación de
+  Windows todavía — ver la pregunta abierta en
+  [`src/vpnmanager/connectors/README.md`](src/vpnmanager/connectors/README.md).
 
-Pendiente, por orden: `connectors/base.py` con `LauncherConnector`, árbitro de
-túnel, protocolo del pipe, watchdog de reversión, carga y verificación del
-catálogo firmado.
+Pendiente, por orden: árbitro de túnel, protocolo del pipe, watchdog de
+reversión, carga y verificación del catálogo firmado, implementación de
+`ProcessLauncher` para Windows y los conectores por proveedor.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
