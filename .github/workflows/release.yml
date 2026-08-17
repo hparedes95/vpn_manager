@@ -67,17 +67,26 @@ jobs:
           path: dist/installer/*.exe
           if-no-files-found: error
 
+      # Con `gh`, que viene instalado en el runner, y no con una accion de
+      # terceros. Actions descarga todas las acciones antes de empezar, aunque
+      # el paso vaya a saltarse: una descarga fallida de algo que no se usa
+      # tumbaba la build entera antes de ejecutar nada.
       - name: Crear la release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/installer/*.exe
-          body: |
-            Instalador de pruebas, **sin firmar**. Windows avisara al ejecutarlo.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notas = @"
+          Instalador de pruebas, **sin firmar**. Windows avisara al ejecutarlo.
 
-            Para una VM de pruebas, no para repartir por la oficina: la casilla
-            de "aceptar el catalogo sin firma" quita la unica proteccion que
-            impide que quien pueda escribir `profiles.json` elija que ejecuta
-            el servicio como SYSTEM.
+          Para una VM de pruebas, no para repartir por la oficina: la casilla
+          de "aceptar el catalogo sin firma" quita la unica proteccion que
+          impide que quien pueda escribir profiles.json elija que ejecuta el
+          servicio como SYSTEM.
 
-            Como probarlo, en `docs/PRUEBAS.md`.
+          Como probarlo, en docs/PRUEBAS.md.
+          "@
+          $notas | Out-File -FilePath notas.md -Encoding utf8
+          gh release create $env:GITHUB_REF_NAME (Get-Item dist/installer/*.exe).FullName `
+            --title $env:GITHUB_REF_NAME --notes-file notas.md
