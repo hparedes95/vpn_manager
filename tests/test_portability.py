@@ -38,6 +38,7 @@ DISPATCHER = SRC / "service" / "dispatcher.py"
 PROVIDERS = SRC / "connectors" / "providers.py"
 UI_CLIENT = SRC / "ui" / "client.py"
 TRAY = SRC / "ui" / "tray.py"
+WINDOW = SRC / "ui" / "window.py"
 
 # Lo unico que la bandeja puede importar del proyecto. Es el unico modulo
 # exento de mypy y de tests —sin PySide6 no hay nada que comprobar, y PySide6
@@ -51,6 +52,7 @@ TRAY_MAY_IMPORT = frozenset(
         "vpnmanager.core.models",
         "vpnmanager.core.protocol",
         "vpnmanager.connectors.process",
+        "vpnmanager.ui.window",
     }
 )
 
@@ -155,6 +157,7 @@ def test_the_modules_under_watch_exist() -> None:
     assert DISPATCHER.is_file()
     assert UI_CLIENT.is_file()
     assert TRAY.is_file()
+    assert WINDOW.is_file()
     assert len(PLATFORM_FREE_MODULES) >= 8
 
 
@@ -164,7 +167,7 @@ def test_the_tray_stays_thin() -> None:
     Si esto falla, la pregunta no es que añadir a la lista: es que hace ese
     modulo importando logica que no puede probar nadie.
     """
-    tree = ast.parse(TRAY.read_text(encoding="utf-8"))
+    tree = ast.parse(TRAY.read_text(encoding="utf-8") + WINDOW.read_text(encoding="utf-8"))
     imported = {
         node.module
         for node in ast.walk(tree)

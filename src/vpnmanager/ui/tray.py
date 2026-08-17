@@ -22,14 +22,15 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from vpnmanager.connectors.process import WindowsProcessLauncher
-from vpnmanager.core.models import Capability, ConnectionState
-from vpnmanager.core.protocol import ProfileSummary, ProtocolError, Response
-from vpnmanager.ui.client import ServiceClient, action_label, needs_asking_first
+from vpnmanager.core.models import ConnectionState
+from vpnmanager.core.protocol import ProfileSummary, ProtocolError
+from vpnmanager.ui.client import ServiceClient, action_label
 from vpnmanager.ui.transport import PipeTransport, PipeUnavailable
+from vpnmanager.ui.window import MainWindow
 
 log = logging.getLogger("vpnmgr.ui")
 
@@ -65,6 +66,9 @@ class TrayApp:
         self._watching: set[str] = set()
         self._last_problem = ""
 
+        self._window = MainWindow(client, self._watching)
+        self._window.requested_refresh = self._tick
+
         # Con el clic izquierdo tambien. Por defecto un icono de bandeja solo
         # abre su menu con el derecho, y quien no lo sabe concluye —con razon—
         # que la aplicacion no hace nada.
@@ -76,13 +80,13 @@ class TrayApp:
 
     def start(self) -> None:
         self._icon.show()
+        self._window.show()
         self._tick()
         # Esta aplicacion no tiene ventana: sin este aviso, arrancarla y que no
         # pase nada visible es indistinguible de que no haya arrancado.
         self._icon.showMessage(
             "VPN Manager",
-            "Esta en la bandeja del sistema, junto al reloj. Pulsa el icono "
-            "para ver tus VPN.",
+            "Esta en la bandeja del sistema, junto al reloj. Pulsa el icono para ver tus VPN.",
             QSystemTrayIcon.MessageIcon.Information,
             5000,
         )
@@ -92,7 +96,12 @@ class TrayApp:
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
-            self._menu.popup(QCursor.pos())
+            self._show_window()
+
+    def _show_window(self) -> None:
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
 
     # -- Ciclo -------------------------------------------------------------
 
@@ -124,7 +133,9 @@ class TrayApp:
             if self._last_problem != str(error):
                 self._last_problem = str(error)
                 log.warning("sin conexion con el servicio: %s", error)
+                self._window.note(f"✕ sin conexion con el servicio: {error}")
             self._icon.setToolTip(f"VPN Manager: {error}")
+            self._window.show_problem(str(error))
             return
         except Exception:
             log.exception("fallo inesperado refrescando la lista de perfiles")
@@ -133,18 +144,24 @@ class TrayApp:
 
         if self._last_problem:
             log.info("recuperada la conexion con el servicio")
+            self._window.note("· recuperada la conexion con el servicio")
             self._last_problem = ""
         self._icon.setToolTip(f"VPN Manager: {len(profiles)} perfiles")
+        self._window.show_profiles(profiles)
         self._rebuild(profiles)
 
     def _rebuild(self, profiles: tuple[ProfileSummary, ...]) -> None:
         self._menu.clear()
+        open_action = QAction("Abrir VPN Manager", self._menu)
+        open_action.triggered.connect(self._show_window)
+        self._menu.addAction(open_action)
+        self._menu.addSeparator()
         for summary in profiles:
             mark = _STATE_MARK.get(summary.state, "○")
             action = QAction(
                 f"{mark}  {summary.display_name} — {action_label(summary)}", self._menu
             )
-            action.triggered.connect(lambda _checked=False, s=summary: self._act_on(s))
+            action.triggered.connect(lambda _checked=False, s=summary: self._window.act_on(s))
             self._menu.addAction(action)
 
         self._menu.addSeparator()
@@ -152,74 +169,7 @@ class TrayApp:
         quit_action.triggered.connect(QApplication.quit)
         self._menu.addAction(quit_action)
 
-    # -- Acciones ----------------------------------------------------------
-
-    def _act_on(self, summary: ProfileSummary) -> None:
-        try:
-            self._run_action(summary)
-        except (PipeUnavailable, ProtocolError) as error:
-            self._warn("Sin conexion con el servicio", str(error))
-        except Exception:
-            # Un slot de Qt que deja escapar una excepcion mata la aplicacion.
-            log.exception("fallo inesperado atendiendo una accion")
-            self._warn("Error interno", f"Algo ha fallado. El detalle esta en:\n{LOG_PATH}")
-
-    def _run_action(self, summary: ProfileSummary) -> None:
-        if summary.state is ConnectionState.CONNECTED:
-            if Capability.DISCONNECT in summary.capabilities:
-                self._report(self._client.disconnect(summary.id))
-                self._watching.discard(summary.id)
-            return
-
-        if needs_asking_first(summary) and not self._ask_about_losing_the_network(summary):
-            return
-
-        # Siempre CONNECT, nunca LAUNCH. Es el servicio quien decide si un
-        # conector sabe conectar o solo abrir el cliente, y solo el camino de
-        # CONNECT pasa por el arbitro, saca la foto de red y arma el watchdog.
-        # Mandar LAUNCH desde aqui montaria un tunel completo sin marcha atras.
-        response = self._client.connect(summary.id, user_confirmed=summary.needs_confirmation)
-
-        if response.ok:
-            # A partir de aqui hay que confirmar hasta que el tunel este
-            # arriba, o el servicio lo deshara.
-            self._watching.add(summary.id)
-        self._report(response)
-
-    def _ask_about_losing_the_network(self, summary: ProfileSummary) -> bool:
-        """HU-03. La pregunta se hace **antes**, no despues de cortar la red.
-
-        Quien pulsa esto suele estar trabajando por escritorio remoto contra
-        este mismo equipo, y va a perder la sesion.
-        """
-        answer = QMessageBox.warning(
-            None,
-            "Vas a perder la conexion local",
-            f"Conectar «{summary.display_name}» corta la conectividad local de este "
-            f"equipo.\n\nSi estas trabajando por escritorio remoto contra el, perderas "
-            f"la sesion en cuanto se conecte.\n\n¿Seguro que quieres continuar?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        return answer == QMessageBox.StandardButton.Yes
-
     # -- Avisos ------------------------------------------------------------
-
-    def _report(self, response: Response) -> None:
-        if response.manual_disconnect_first:
-            pending = ", ".join(response.manual_disconnect_first)
-            self._warn(
-                "Hay que desconectar algo a mano",
-                f"{response.message}\n\nPerfiles: {pending}",
-            )
-            return
-
-        if not response.ok:
-            self._warn("No se pudo", response.message)
-            return
-
-        for warning in response.warnings:
-            self._icon.showMessage("VPN Manager", warning, QSystemTrayIcon.MessageIcon.Warning)
 
     def _warn(self, title: str, detail: str) -> None:
         QMessageBox.warning(None, title, detail)
