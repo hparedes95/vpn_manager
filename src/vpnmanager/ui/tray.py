@@ -22,7 +22,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from vpnmanager.connectors.process import WindowsProcessLauncher
@@ -65,6 +65,11 @@ class TrayApp:
         self._watching: set[str] = set()
         self._last_problem = ""
 
+        # Con el clic izquierdo tambien. Por defecto un icono de bandeja solo
+        # abre su menu con el derecho, y quien no lo sabe concluye —con razon—
+        # que la aplicacion no hace nada.
+        self._icon.activated.connect(self._clicked)
+
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
         self._timer.start(REFRESH_MS)
@@ -72,6 +77,22 @@ class TrayApp:
     def start(self) -> None:
         self._icon.show()
         self._tick()
+        # Esta aplicacion no tiene ventana: sin este aviso, arrancarla y que no
+        # pase nada visible es indistinguible de que no haya arrancado.
+        self._icon.showMessage(
+            "VPN Manager",
+            "Esta en la bandeja del sistema, junto al reloj. Pulsa el icono "
+            "para ver tus VPN.",
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+
+    def _clicked(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._menu.popup(QCursor.pos())
 
     # -- Ciclo -------------------------------------------------------------
 
