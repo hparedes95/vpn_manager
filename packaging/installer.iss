@@ -60,15 +60,24 @@ Name: allowunsigned; Description: \
 ; Con --allow-unsigned-catalog el catalogo deja de estar protegido por una
 ; firma. Es lo unico que permite probar sin certificado, y por eso va como una
 ; casilla aparte, desmarcada y con el aviso escrito.
+; El Administrador de servicios arranca el .exe sin argumentos, asi que la
+; opcion de catalogo sin firma no puede ir en binPath: se deja marcada con un
+; fichero junto al catalogo, en un directorio donde solo escriben los
+; administradores.
 Filename: "{sys}\sc.exe"; \
-    Parameters: "create VpnManagerSvc binPath= ""\""{app}\svc\vpnmgr-svc.exe\"" --allow-unsigned-catalog"" start= auto DisplayName= ""VPN Manager"""; \
-    Flags: runhidden; Tasks: installservice and allowunsigned
-Filename: "{sys}\sc.exe"; \
-    Parameters: "create VpnManagerSvc binPath= ""\""{app}\svc\vpnmgr-svc.exe\"""" start= auto DisplayName= ""VPN Manager"""; \
-    Flags: runhidden; Tasks: installservice and not allowunsigned
+    Parameters: "create VpnManagerSvc binPath= ""{app}\svc\vpnmgr-svc.exe"" start= auto DisplayName= ""VPN Manager"""; \
+    Flags: runhidden; Tasks: installservice
 Filename: "{sys}\sc.exe"; Parameters: "start VpnManagerSvc"; Flags: runhidden; Tasks: installservice
 
 Filename: "{app}\ui\vpnmgr-ui.exe"; Description: "Abrir la bandeja"; Flags: postinstall nowait skipifsilent
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and WizardIsTaskSelected('allowunsigned') then
+    SaveStringToFile(ExpandConstant('{commonappdata}\VpnManager\ALLOW_UNSIGNED_CATALOG'),
+      'Solo pruebas. Con este fichero el catalogo no se verifica.' + #13#10, False);
+end;
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop VpnManagerSvc"; Flags: runhidden; RunOnceId: "StopSvc"

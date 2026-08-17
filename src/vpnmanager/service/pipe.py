@@ -29,9 +29,19 @@ PIPE_NAME: Final = r"\\.\pipe\vpnmgr"
 BUFFER_SIZE: Final = 64 * 1024
 RETRY_SECONDS: Final = 2.0
 
-# Quien puede hablar con el servicio. Se sustituye por el grupo de AD cuando
-# exista: hasta entonces, solo administradores del equipo.
-DEFAULT_ALLOWED_GROUPS: Final = ("BUILTIN\\Administrators",)
+# Quien puede hablar con el servicio, por SID y no por nombre.
+#
+# Los grupos integrados de Windows estan traducidos: en un Windows en español
+# el grupo no se llama "Administrators" sino "Administradores", y
+# `LookupAccountName` falla con el error 1332. El SID es el mismo en todos los
+# idiomas y en todas las instalaciones, asi que es lo unico que se puede
+# escribir en el codigo sin dar por hecho el idioma de la maquina.
+#
+# S-1-5-32-544 = Administradores del equipo.
+ADMINISTRATORS_SID: Final = "S-1-5-32-544"
+LOCAL_SYSTEM_SID: Final = "S-1-5-18"
+
+DEFAULT_ALLOWED_GROUPS: Final = (ADMINISTRATORS_SID,)
 
 
 def build_security_attributes(allowed_groups: tuple[str, ...]):  # type: ignore[no-untyped-def]
@@ -51,20 +61,36 @@ def build_security_attributes(allowed_groups: tuple[str, ...]):  # type: ignore[
     attributes = win32security.SECURITY_ATTRIBUTES()
     acl = win32security.ACL()
 
-    system = win32security.ConvertStringSidToSid("S-1-5-18")
+    system = win32security.ConvertStringSidToSid(LOCAL_SYSTEM_SID)
     acl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, system)
 
     for group in allowed_groups:
-        sid, _, _ = win32security.LookupAccountName(None, group)
         acl.AddAccessAllowedAce(
             win32security.ACL_REVISION,
             ntsecuritycon.FILE_GENERIC_READ | ntsecuritycon.FILE_GENERIC_WRITE,
-            sid,
+            resolve_sid(group),
         )
 
     # Sin herencia y con una DACL explicita: nadie mas entra.
     attributes.SetSecurityDescriptorDacl(1, acl, 0)
     return attributes
+
+
+def resolve_sid(group: str):  # type: ignore[no-untyped-def]
+    """El SID de un grupo, venga como SID o como nombre.
+
+    Un SID se usa tal cual. Un nombre —el grupo de AD, cuando exista— hay que
+    resolverlo, y ahi si tiene sentido: los grupos de dominio no estan
+    traducidos. Lo que no se resuelve nunca por nombre son los integrados de
+    Windows, que si lo estan.
+    """
+    import win32security
+
+    if group.upper().startswith("S-1-"):
+        return win32security.ConvertStringSidToSid(group)
+
+    sid, _, _ = win32security.LookupAccountName(None, group)
+    return sid
 
 
 class PipeServer:

@@ -40,10 +40,16 @@ SIGNATURE_PATH: Final = DATA_DIR / "profiles.json.sig"
 # gastar nada.
 TICK_SECONDS: Final = 1.0
 
+# Como servicio no hay consola: lo que se escriba en stdout se pierde. El
+# fichero es lo unico que queda para saber por que no arranco.
+LOG_PATH: Final = DATA_DIR / "vpnmgr-svc.log"
+
 
 def build_orchestrator(verifier: CatalogVerifier) -> tuple[Orchestrator, DeferredUserSession]:
     """Monta el orquestador con las implementaciones de verdad."""
-    load = load_catalog(_read(CATALOG_PATH), _read(SIGNATURE_PATH), verifier)
+    # La firma puede no estar, y con el verificador de pruebas eso es lo
+    # normal: no merece un ERROR que asusta en el log.
+    load = load_catalog(_read(CATALOG_PATH), _read(SIGNATURE_PATH, required=False), verifier)
     for issue in load.issues:
         # Se registran todas: quien edita el catalogo las arregla de una vez.
         log.error("catalogo: %s", issue)
@@ -87,7 +93,35 @@ def run_watchdog_loop(orchestrator: Orchestrator, stop: threading.Event) -> None
         stop.wait(TICK_SECONDS)
 
 
+def allow_unsigned_from_registry() -> bool:
+    """Si el servicio debe aceptar un catalogo sin firma.
+
+    Como servicio no hay linea de comandos util —el Administrador de
+    servicios arranca el .exe sin argumentos— asi que la decision se guarda
+    en un fichero junto al catalogo. Existe solo para poder probar sin
+    certificado; su presencia se grita en el log en cada arranque.
+    """
+    return (DATA_DIR / "ALLOW_UNSIGNED_CATALOG").exists()
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw = sys.argv if argv is None else [sys.argv[0], *argv]
+    if _looks_like_service_start(raw):
+        # Sin argumentos: nos ha arrancado el Administrador de servicios.
+        from vpnmanager.service.winservice import run_as_service
+
+        run_as_service()
+        return 0
+    return run_console(argv)
+
+
+def _looks_like_service_start(raw: list[str]) -> bool:
+    from vpnmanager.service.winservice import is_service_start
+
+    return is_service_start(raw)
+
+
+def run_console(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vpnmgr-svc", description="Servicio de VPN Manager")
     parser.add_argument(
         "--allow-unsigned-catalog",
@@ -102,13 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        stream=sys.stdout,
-    )
+    setup_logging()
 
-    verifier = _verifier(allow_unsigned=args.allow_unsigned_catalog)
+    verifier = verifier_for(allow_unsigned=args.allow_unsigned_catalog)
     orchestrator, user_session = build_orchestrator(verifier)
 
     stop = threading.Event()
@@ -138,7 +168,23 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _verifier(*, allow_unsigned: bool) -> CatalogVerifier:
+def setup_logging() -> None:
+    """A fichero siempre, y ademas a consola si la hay."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(LOG_PATH, encoding="utf-8"))
+    except OSError:
+        # Sin fichero se sigue: quedarse sin log es malo, no arrancar es peor.
+        pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
+
+
+def verifier_for(*, allow_unsigned: bool) -> CatalogVerifier:
     """El verificador del catalogo. Por defecto, el que no se fia de nada."""
     if not allow_unsigned:
         return RejectingVerifier()
@@ -153,11 +199,16 @@ def _verifier(*, allow_unsigned: bool) -> CatalogVerifier:
     return UnsafeUnsignedCatalogVerifier()
 
 
-def _read(path: Path) -> bytes:
+def _read(path: Path, *, required: bool = True) -> bytes:
     try:
         return path.read_bytes()
     except OSError as error:
-        log.error("no se pudo leer %s: %s", path, error.strerror)
+        log.log(
+            logging.ERROR if required else logging.INFO,
+            "no se pudo leer %s: %s",
+            path,
+            error.strerror,
+        )
         return b""
 
 

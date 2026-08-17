@@ -15,7 +15,7 @@ from pathlib import Path
 
 from vpnmanager.security.catalog import RejectingVerifier
 from vpnmanager.security.unsafe_dev import UnsafeUnsignedCatalogVerifier
-from vpnmanager.service.main import _verifier
+from vpnmanager.service.main import verifier_for
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "vpnmanager"
 UNSAFE_MODULE = "vpnmanager.security.unsafe_dev"
@@ -43,11 +43,11 @@ def test_nothing_else_in_the_project_imports_it() -> None:
 
 def test_by_default_nothing_unsigned_is_accepted() -> None:
     """Sin pedirlo a mano, el servicio no se fia de ningun catalogo."""
-    assert isinstance(_verifier(allow_unsigned=False), RejectingVerifier)
+    assert isinstance(verifier_for(allow_unsigned=False), RejectingVerifier)
 
 
 def test_it_takes_asking_for_it_on_purpose() -> None:
-    assert isinstance(_verifier(allow_unsigned=True), UnsafeUnsignedCatalogVerifier)
+    assert isinstance(verifier_for(allow_unsigned=True), UnsafeUnsignedCatalogVerifier)
 
 
 def test_its_own_name_says_what_it_is() -> None:

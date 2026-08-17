@@ -63,6 +63,7 @@ class TrayApp:
         self._menu = QMenu()
         self._icon.setContextMenu(self._menu)
         self._watching: set[str] = set()
+        self._last_problem = ""
 
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
@@ -96,6 +97,12 @@ class TrayApp:
         try:
             profiles = self._client.list_profiles()
         except (PipeUnavailable, ProtocolError) as error:
+            # Se registra, y una sola vez seguida: es el caso mas frecuente
+            # —el servicio parado— y sin esta linea el log parece vacio y no
+            # hay forma de saber si la bandeja esta viva o rota.
+            if self._last_problem != str(error):
+                self._last_problem = str(error)
+                log.warning("sin conexion con el servicio: %s", error)
             self._icon.setToolTip(f"VPN Manager: {error}")
             return
         except Exception:
@@ -103,7 +110,10 @@ class TrayApp:
             self._icon.setToolTip("VPN Manager: error interno, mira el log")
             return
 
-        self._icon.setToolTip("VPN Manager")
+        if self._last_problem:
+            log.info("recuperada la conexion con el servicio")
+            self._last_problem = ""
+        self._icon.setToolTip(f"VPN Manager: {len(profiles)} perfiles")
         self._rebuild(profiles)
 
     def _rebuild(self, profiles: tuple[ProfileSummary, ...]) -> None:
