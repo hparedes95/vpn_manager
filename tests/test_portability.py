@@ -34,6 +34,9 @@ CORE = SRC / "core"
 CONNECTOR_BASE = SRC / "connectors" / "base.py"
 CATALOG = SRC / "security" / "catalog.py"
 ORCHESTRATOR = SRC / "service" / "orchestrator.py"
+DISPATCHER = SRC / "service" / "dispatcher.py"
+PROVIDERS = SRC / "connectors" / "providers.py"
+UI_CLIENT = SRC / "ui" / "client.py"
 
 # Modulos que atan un modulo puro a Windows, a la red o a un proceso externo.
 FORBIDDEN_MODULES = frozenset(
@@ -66,12 +69,23 @@ FORBIDDEN_MODULES = frozenset(
 LAYERS = frozenset({"connectors", "net", "security", "service", "ui"})
 
 # Ninguno de estos puede importar Windows ni red.
-PLATFORM_FREE_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG, ORCHESTRATOR]
+PLATFORM_FREE_MODULES = [
+    *sorted(CORE.rglob("*.py")),
+    CONNECTOR_BASE,
+    PROVIDERS,
+    CATALOG,
+    ORCHESTRATOR,
+    DISPATCHER,
+    # La interfaz acabara importando PySide6, pero esto de aqui no: es el lado
+    # de la interfaz que se puede probar sin escritorio, y tiene que seguir
+    # pudiendose.
+    UI_CLIENT,
+]
 
 # Y estos, ademas, no pueden depender de otra capa. El orquestador queda fuera
 # a proposito: es la raiz de composicion, el sitio donde las piezas se juntan,
 # asi que conocerlas todas es su trabajo. Lo que no se le perdona es Windows.
-LAYERED_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, CATALOG]
+LAYERED_MODULES = [*sorted(CORE.rglob("*.py")), CONNECTOR_BASE, PROVIDERS, CATALOG]
 
 
 def module_id(path: Path) -> str:
@@ -122,7 +136,9 @@ def test_the_modules_under_watch_exist() -> None:
     assert CONNECTOR_BASE.is_file()
     assert CATALOG.is_file()
     assert ORCHESTRATOR.is_file()
-    assert len(PLATFORM_FREE_MODULES) >= 4
+    assert DISPATCHER.is_file()
+    assert UI_CLIENT.is_file()
+    assert len(PLATFORM_FREE_MODULES) >= 8
 
 
 # Los tres tests siguientes prueban al guardian, no al codigo: un guardian que
