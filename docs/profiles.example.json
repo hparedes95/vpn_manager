@@ -8,7 +8,8 @@
       "launch": {
         "kind": "exe",
         "target": "C:\\Program Files\\WireGuard\\wireguard.exe",
-        "args": ["/installtunnelservice"]
+        "args": ["/installtunnelservice"],
+        "context": "service"
       },
       "tunnel_type": "full",
       "target_networks": ["10.0.0.0/8"],

@@ -19,6 +19,7 @@ from vpnmanager.core.models import (
     Capability,
     ConnectionState,
     DisconnectStrategy,
+    LaunchContext,
     LaunchKind,
     LaunchSpec,
     Profile,
@@ -168,6 +169,25 @@ def test_exe_spec_is_not_required_to_contain_a_separator() -> None:
 
 def test_launch_spec_defaults_to_no_arguments() -> None:
     assert exe_spec().args == ()
+
+
+def test_a_launch_runs_in_the_user_session_unless_it_asks_otherwise() -> None:
+    """Correr como SYSTEM hay que pedirlo a proposito, no cae por comodidad."""
+    assert exe_spec().context is LaunchContext.USER_SESSION
+
+
+def test_an_msix_cannot_be_launched_by_the_service() -> None:
+    """Una app de Store se resuelve contra el usuario que la tiene instalada."""
+    spec = LaunchSpec(kind=LaunchKind.MSIX, target=AZURE_PFN, context=LaunchContext.SERVICE)
+
+    assert mentions(spec.validate(), "sesion del usuario")
+
+
+def test_an_exe_may_be_launched_by_the_service() -> None:
+    """`wireguard.exe /installtunnelservice` necesita privilegio y no es interactivo."""
+    spec = LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE, context=LaunchContext.SERVICE)
+
+    assert spec.validate() == []
 
 
 def test_launch_spec_is_immutable() -> None:

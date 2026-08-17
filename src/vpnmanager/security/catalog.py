@@ -35,6 +35,7 @@ from typing import Final, Protocol
 
 from vpnmanager.core.models import (
     DisconnectStrategy,
+    LaunchContext,
     LaunchKind,
     LaunchSpec,
     Profile,
@@ -62,7 +63,7 @@ _PROFILE_KEYS: Final = frozenset(
         "notes",
     }
 )
-_LAUNCH_KEYS: Final = frozenset({"kind", "target", "args"})
+_LAUNCH_KEYS: Final = frozenset({"kind", "target", "args", "context"})
 
 
 class CatalogVerifier(Protocol):
@@ -303,4 +304,7 @@ def _launch_spec(value: object, where: str) -> LaunchSpec:
         kind=_enum(data, "kind", LaunchKind, where),
         target=_string(data, "target", where),
         args=_strings(data, "args", where),
+        # Ausente significa "en la sesion del usuario", que es lo habitual y lo
+        # menos privilegiado. Correr como SYSTEM hay que pedirlo a proposito.
+        context=_enum(data, "context", LaunchContext, where, default=LaunchContext.USER_SESSION),
     )

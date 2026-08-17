@@ -90,11 +90,35 @@ class LaunchKind(Enum):
     MSIX = "msix"
 
 
+class LaunchContext(Enum):
+    """En que proceso se ejecuta el binario. Lo decide el catalogo, por perfil.
+
+    Los clientes VPN con interfaz tienen que aparecer en la sesion del usuario:
+    el servicio corre en SYSTEM, en la sesion 0, donde no hay escritorio. Un
+    cliente lanzado ahi seria invisible y no podria pedir credenciales ni MFA,
+    ademas de no alcanzar el almacen de credenciales del usuario.
+
+    Por eso `USER_SESSION` es el valor por defecto y el habitual: el servicio
+    manda a la interfaz la orden de lanzar y la interfaz arranca el proceso con
+    los permisos que el usuario ya tiene. El dato viaja del proceso
+    privilegiado al que no lo es, nunca al reves, asi que no hay escalada: la
+    interfaz no puede lanzar nada que el usuario no pudiera lanzar solo.
+
+    `SERVICE` es para lo que de verdad necesita privilegio y no es interactivo,
+    como `wireguard.exe /installtunnelservice`. Lo ejecuta SYSTEM y por eso es
+    la opcion que hay que justificar, no la que se coge por comodidad.
+    """
+
+    USER_SESSION = "user_session"
+    SERVICE = "service"
+
+
 @dataclass(frozen=True)
 class LaunchSpec:
     kind: LaunchKind
     target: str  # ruta al .exe, o PFN!AppId para MSIX
     args: tuple[str, ...] = ()
+    context: LaunchContext = LaunchContext.USER_SESSION
 
     def validate(self) -> list[str]:
         issues: list[str] = []
@@ -102,6 +126,10 @@ class LaunchSpec:
             issues.append("target vacio")
         if self.kind is LaunchKind.MSIX and "!" not in self.target:
             issues.append("un target MSIX debe tener el formato <PackageFamilyName>!<AppId>")
+        if self.kind is LaunchKind.MSIX and self.context is LaunchContext.SERVICE:
+            # Una app de Store se resuelve contra el usuario que la tiene
+            # instalada. Desde SYSTEM no hay tal usuario.
+            issues.append("un target MSIX solo se puede lanzar en la sesion del usuario")
         if self.kind is LaunchKind.EXE and not self.target.lower().endswith(".exe"):
             issues.append("un target EXE debe apuntar a un .exe")
         elif self.kind is LaunchKind.EXE:

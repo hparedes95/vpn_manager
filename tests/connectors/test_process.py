@@ -1,0 +1,218 @@
+"""Tests del lanzador de procesos.
+
+Aqui no se arranca ningun cliente VPN: no hay Windows y no hay clientes. Lo
+que si se puede comprobar, y es lo que importa, es **que se le pediria al
+sistema operativo**: la lista de argumentos exacta, que nunca hay `shell=True`,
+y que un `LaunchSpec` invalido no llega a crear un proceso.
+
+Que `wireguard.exe` obedezca ya es otra historia, y esa se prueba en un puesto.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from vpnmanager.connectors.process import (
+    UnavailableUserSession,
+    WindowsProcessLauncher,
+)
+from vpnmanager.core.models import LaunchContext, LaunchKind, LaunchSpec
+
+WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
+AZURE_PFN = "Microsoft.AzureVpn_8wekyb3d8bbwe!App"
+
+
+class FakePopen:
+    """Sustituye a subprocess.Popen y anota como se le llamo."""
+
+    def __init__(self) -> None:
+        self.argv: list[str] | None = None
+        self.kwargs: dict[str, Any] = {}
+        self.error: OSError | None = None
+        self.pid = 4242
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> FakePopen:
+        if self.error is not None:
+            raise self.error
+        self.argv = argv
+        self.kwargs = kwargs
+        return self
+
+
+class RecordingUserSession:
+    def __init__(self) -> None:
+        self.specs: list[LaunchSpec] = []
+
+    def start_for_user(self, spec: LaunchSpec) -> Any:
+        from vpnmanager.connectors.base import LaunchOutcome
+
+        self.specs.append(spec)
+        return LaunchOutcome(started=True, pid=99)
+
+
+@pytest.fixture
+def popen(monkeypatch: pytest.MonkeyPatch) -> FakePopen:
+    fake = FakePopen()
+    monkeypatch.setattr("vpnmanager.connectors.process.subprocess.Popen", fake)
+    return fake
+
+
+def service_spec(target: str = WIREGUARD_EXE, args: tuple[str, ...] = ()) -> LaunchSpec:
+    return LaunchSpec(
+        kind=LaunchKind.EXE,
+        target=target,
+        args=args,
+        context=LaunchContext.SERVICE,
+    )
+
+
+# --------------------------------------------------------------------------
+# Que se le pide al sistema
+# --------------------------------------------------------------------------
+
+
+def test_an_exe_is_launched_with_its_arguments_as_a_list(popen: FakePopen) -> None:
+    """Nunca una cadena: un espacio en 'Program Files' no puede ser un separador."""
+    launcher = WindowsProcessLauncher()
+
+    outcome = launcher.start(service_spec(args=("/installtunnelservice", "corp.conf")))
+
+    assert outcome.started
+    assert popen.argv == [WIREGUARD_EXE, "/installtunnelservice", "corp.conf"]
+
+
+def test_the_shell_is_never_used(popen: FakePopen) -> None:
+    """La regla que no se negocia en todo el repositorio."""
+    WindowsProcessLauncher().start(service_spec())
+
+    assert popen.kwargs["shell"] is False
+
+
+def test_the_child_gets_no_standard_streams(popen: FakePopen) -> None:
+    """Un cliente VPN no tiene nada que decirle por consola a un servicio."""
+    WindowsProcessLauncher().start(service_spec())
+
+    assert popen.kwargs["stdin"] is not None
+    assert popen.kwargs["close_fds"] is True
+
+
+def test_an_msix_is_opened_through_the_shell_folder(popen: FakePopen) -> None:
+    """Una app de Store no tiene ruta: se abre por su Package Family Name."""
+    spec = LaunchSpec(kind=LaunchKind.MSIX, target=AZURE_PFN)
+
+    WindowsProcessLauncher().start_here(spec)
+
+    assert popen.argv == [r"C:\Windows\explorer.exe", f"shell:AppsFolder\\{AZURE_PFN}"]
+
+
+def test_an_msix_reports_no_pid(popen: FakePopen) -> None:
+    """El pid seria el del explorador, y TERMINATE mataria el escritorio."""
+    spec = LaunchSpec(kind=LaunchKind.MSIX, target=AZURE_PFN)
+
+    outcome = WindowsProcessLauncher().start_here(spec)
+
+    assert outcome.started
+    assert outcome.pid is None
+
+
+def test_an_exe_reports_its_pid(popen: FakePopen) -> None:
+    outcome = WindowsProcessLauncher().start(service_spec())
+
+    assert outcome.pid == 4242
+
+
+# --------------------------------------------------------------------------
+# Lo que no se llega a arrancar
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        r"C:\temp\conectar.bat",
+        "wireguard.exe",
+        r"\\servidor\share\wireguard.exe",
+        "",
+    ],
+)
+def test_an_invalid_spec_never_creates_a_process(popen: FakePopen, target: str) -> None:
+    """Ultima puerta antes de crear un proceso como SYSTEM."""
+    outcome = WindowsProcessLauncher().start(service_spec(target))
+
+    assert not outcome.started
+    assert "launch invalido" in outcome.detail
+    assert popen.argv is None
+
+
+def test_a_client_that_is_not_installed_is_reported_not_raised(popen: FakePopen) -> None:
+    """Que falte un cliente en un puesto es informacion, no una excepcion."""
+    popen.error = FileNotFoundError(2, "El sistema no puede encontrar el archivo")
+
+    outcome = WindowsProcessLauncher().start(service_spec())
+
+    assert not outcome.started
+    assert "encontrar el archivo" in outcome.detail
+
+
+def test_a_permission_error_is_reported_too(popen: FakePopen) -> None:
+    popen.error = PermissionError(13, "Acceso denegado")
+
+    outcome = WindowsProcessLauncher().start(service_spec())
+
+    assert not outcome.started
+    assert "Acceso denegado" in outcome.detail
+
+
+# --------------------------------------------------------------------------
+# Sesion 0: quien arranca que
+# --------------------------------------------------------------------------
+
+
+def test_a_user_session_spec_is_not_launched_by_the_service(popen: FakePopen) -> None:
+    """Un cliente con interfaz lanzado desde SYSTEM seria invisible."""
+    session = RecordingUserSession()
+    launcher = WindowsProcessLauncher(user_session=session)
+    spec = LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE)
+
+    outcome = launcher.start(spec)
+
+    assert outcome.started
+    assert session.specs == [spec]
+    assert popen.argv is None
+
+
+def test_a_service_spec_is_launched_here(popen: FakePopen) -> None:
+    """`/installtunnelservice` necesita privilegio y no habla con nadie."""
+    session = RecordingUserSession()
+
+    WindowsProcessLauncher(user_session=session).start(service_spec())
+
+    assert session.specs == []
+    assert popen.argv is not None
+
+
+def test_the_user_session_is_the_default_context() -> None:
+    """Correr como SYSTEM hay que pedirlo a proposito, no cae por comodidad."""
+    assert LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE).context is (
+        LaunchContext.USER_SESSION
+    )
+
+
+def test_without_an_interface_connected_it_says_so(popen: FakePopen) -> None:
+    """Pasa siempre entre que arranca el servicio y alguien inicia sesion."""
+    outcome = WindowsProcessLauncher().start(LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE))
+
+    assert not outcome.started
+    assert "sesion de usuario" in outcome.detail
+    assert popen.argv is None
+
+
+def test_the_unavailable_session_never_starts_anything() -> None:
+    outcome = UnavailableUserSession().start_for_user(
+        LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE)
+    )
+
+    assert not outcome.started
+    assert outcome.pid is None
