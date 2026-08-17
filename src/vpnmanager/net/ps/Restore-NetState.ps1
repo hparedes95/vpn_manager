@@ -42,6 +42,19 @@ catch {
     exit 1
 }
 
+# Solo se gestionan las rutas con salto real. Las de salto 0.0.0.0 son
+# "on-link" y las pone Windows solo por cada adaptador levantado: la de
+# loopback, las de subred, la de multidifusion, la de difusion. Intentar
+# recrearlas falla, y cada fallo se contaria como una restauracion incompleta
+# aunque la red estuviera perfecta.
+#
+# Lo que un tunel desplaza —la ruta por defecto y las rutas hacia las redes
+# del cliente— tiene salto, asi que este filtro cubre justo lo que importa.
+function Test-Managed {
+    param($NextHop)
+    return $NextHop -and $NextHop -ne '0.0.0.0' -and $NextHop -ne '::'
+}
+
 $failures = New-Object System.Collections.ArrayList
 $restoredRoutes = 0
 $restoredDns = 0
@@ -55,8 +68,10 @@ try {
     $wanted = @{}
     $knownInterfaces = @{}
     foreach ($route in @($snapshot.routes)) {
-        $wanted["$($route.interfaceIndex)|$($route.destination)|$($route.next_hop)"] = $true
         $knownInterfaces[[int] $route.interfaceIndex] = $true
+        if (Test-Managed $route.next_hop) {
+            $wanted["$($route.interfaceIndex)|$($route.destination)|$($route.next_hop)"] = $true
+        }
     }
 
     # Solo se tocan los interfaces que ya existian cuando se saco la foto. Un
@@ -65,6 +80,7 @@ try {
     # borrarlas dejaria el equipo peor de lo que lo dejo el tunel.
     foreach ($current in @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop)) {
         if (-not $knownInterfaces.ContainsKey([int] $current.InterfaceIndex)) { continue }
+        if (-not (Test-Managed $current.NextHop)) { continue }
         $key = "$([int] $current.InterfaceIndex)|$($current.DestinationPrefix)|$($current.NextHop)"
         if (-not $wanted.ContainsKey($key)) {
             try {
@@ -77,8 +93,7 @@ try {
     }
 
     foreach ($route in @($snapshot.routes)) {
-        # Solo las persistentes o activas; las del store 'ActiveStore' las
-        # vuelve a poner el propio sistema al soltarse el tunel.
+        if (-not (Test-Managed $route.next_hop)) { continue }
         $exists = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object {
                 [int] $_.InterfaceIndex -eq [int] $route.interfaceIndex -and
