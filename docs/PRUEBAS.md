@@ -16,7 +16,7 @@ la red no cueste un viaje.
 | | Qué | Cómo se ve que está bien |
 |---|---|---|
 | ⚠️ | Instalar sobre una versión anterior | Termina sin errores; los `.exe` quedan en `svc\` y `ui\` |
-| ❌ | Marcar «Instalar el servicio» | `sc query VpnManagerSvc` dice `RUNNING` |
+| ❌ | Marcar «Instalar el servicio» | `sc.exe query VpnManagerSvc` dice `RUNNING` |
 | ⚠️ | Marcar «aceptar el catálogo sin firma» | Aparece `C:\ProgramData\VpnManager\ALLOW_UNSIGNED_CATALOG` |
 | ⚠️ | Tu `profiles.json` sobrevive a reinstalar | Sigue con tus ediciones |
 
@@ -37,8 +37,17 @@ En consola:
 & "C:\Program Files\VpnManager\svc\vpnmgr-svc.exe" --allow-unsigned-catalog
 ```
 
-**El servicio de Windows es lo más nuevo y lo que menos confianza me da.** Si
-falla, `sc query VpnManagerSvc` y el log de arriba.
+**El servicio de Windows es lo más nuevo y lo que menos confianza me da.** Si falla, mira el estado y el log:
+
+```powershell
+sc.exe start VpnManagerSvc
+sc.exe query VpnManagerSvc
+Get-Content C:\ProgramData\VpnManager\vpnmgr-svc.log -Tail 20
+```
+
+**Ojo con `sc` en PowerShell**: es un alias de `Set-Content`, asi que
+`sc query X` no consulta nada — crea un fichero llamado `query`. Hay que
+escribir `sc.exe`, o usar `Start-Service` y `Get-Service`.
 
 ## 3. La interfaz
 
