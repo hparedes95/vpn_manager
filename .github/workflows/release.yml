@@ -1,0 +1,83 @@
+name: Instalador
+
+# Construye el .exe en Windows, que es lo unico que puede construirlo, y lo
+# deja descargable. Con etiqueta `v*` ademas crea una release.
+#
+# El instalador sale SIN FIRMAR: Windows y SmartScreen avisaran al ejecutarlo.
+# Es para probar en una VM, no para repartir.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ui,service]" pyinstaller
+
+      - name: Comprobar que el paquete arranca
+        # Antes de empaquetar nada: si el arbol de imports esta roto, mejor
+        # enterarse aqui que dentro de un .exe.
+        run: |
+          python -c "import vpnmanager.service.main; import vpnmanager.ui.tray; print('imports ok')"
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF -replace '^refs/tags/v',''
+          } else {
+            "0.1.0-dev+$($env:GITHUB_SHA.Substring(0,7))"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Construir los ejecutables
+        run: pyinstaller packaging/vpnmgr.spec --noconfirm --clean
+
+      - name: Construir el instalador
+        shell: pwsh
+        env:
+          VPNMGR_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer.iss
+
+      - name: Publicar el instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: VpnManager-setup
+          path: dist/installer/*.exe
+          if-no-files-found: error
+
+      - name: Crear la release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/*.exe
+          body: |
+            Instalador de pruebas, **sin firmar**. Windows avisara al ejecutarlo.
+
+            Para una VM de pruebas, no para repartir por la oficina: la casilla
+            de "aceptar el catalogo sin firma" quita la unica proteccion que
+            impide que quien pueda escribir `profiles.json` elija que ejecuta
+            el servicio como SYSTEM.
+
+            Como probarlo, en `docs/PRUEBAS.md`.

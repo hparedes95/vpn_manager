@@ -111,11 +111,17 @@ queda son adaptadores de plataforma y dos decisiones pendientes:
 - **Conectores, interfaz y bandeja, completados**: los ocho clientes como
   `LauncherConnector`, el cliente del protocolo y la bandeja PySide6.
 
+- **Servicio y empaquetado, completados**: servidor del pipe con ACL, anfitrión
+  y el instalador `.exe` que construye GitHub Actions en un runner de Windows.
+
+**Todo el software está escrito. Nada de lo que toca Windows se ha ejecutado
+nunca.** El siguiente paso es una VM: cómo probarlo, y en qué orden para no
+quedarte fuera del equipo, está en [`docs/PRUEBAS.md`](docs/PRUEBAS.md).
+
 | Falta | Bloqueado por |
 |---|---|
-| Servidor del pipe (transporte) y anfitrión del servicio | Windows y pywin32 |
-| `CatalogVerifier` de verdad | Decidir el esquema de firma |
-| Empaquetado PyInstaller + Intune | Certificado de firma |
+| Firma del catálogo y del ejecutable | Certificado de firma de código |
+| Grupo de AD en la ACL del pipe | El grupo |
 | Verificar `docs/CONECTORES.md` | Un puesto real con los clientes |
 
 `ui/tray.py` es el **único** módulo exento de tipado y de tests: sin PySide6 no
