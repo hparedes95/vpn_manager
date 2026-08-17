@@ -1,93 +1,180 @@
-# Cómo probar esto sin quedarte fuera del equipo
+# Plan de pruebas
 
-Nada del código que toca Windows se ha ejecutado nunca. Estas pruebas no son
-una formalidad: son la primera vez que este software se encuentra con una
-máquina de verdad.
+Marcado por estado real, no por lo que debería funcionar:
 
-## Antes de empezar
+- ✅ **comprobado en un puesto**
+- ⚠️ **escrito y corregido a partir de un fallo real, pero sin volver a probar**
+- ❌ **nunca ejecutado**
 
-**No pruebes en el PC de oficina.** Usa una VM con acceso por consola, donde
-perder la red no cueste un viaje. El software está pensado para correr en un
-equipo que es destino de sesiones RDP, y su fallo característico es dejarlo
-inalcanzable.
+**No pruebes en el PC de oficina.** Una VM con acceso por consola, donde perder
+la red no cueste un viaje.
 
-El instalador **no está firmado**. Windows y SmartScreen avisarán: es esperado.
+---
 
-## Orden de las pruebas
+## 1. Instalación
 
-Está pensado para que cada paso solo pueda romper lo que el anterior ya
-demostró que funciona.
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ⚠️ | Instalar sobre una versión anterior | Termina sin errores; los `.exe` quedan en `svc\` y `ui\` |
+| ❌ | Marcar «Instalar el servicio» | `sc query VpnManagerSvc` dice `RUNNING` |
+| ⚠️ | Marcar «aceptar el catálogo sin firma» | Aparece `C:\ProgramData\VpnManager\ALLOW_UNSIGNED_CATALOG` |
+| ⚠️ | Tu `profiles.json` sobrevive a reinstalar | Sigue con tus ediciones |
 
-### 1. Los scripts de red, a mano y sin el servicio
+El instalador **no está firmado**: SmartScreen avisará. Es esperado.
 
-Es lo más importante y lo que más probable es que falle. Como administrador:
+## 2. El servicio
 
-```powershell
-cd "C:\Program Files\VpnManager\vpnmanager\net\ps"
-$estado = & powershell -ExecutionPolicy Bypass -File .\Get-NetState.ps1
-$estado    # ¿es JSON? ¿aparecen tus rutas y tus DNS?
-```
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ✅ | En consola como administrador | `escuchando en el pipe` sin trazas repitiéndose |
+| ❌ | **Como servicio de Windows** | Arranca sin el error 1053 |
+| ❌ | Log en fichero | `C:\ProgramData\VpnManager\vpnmgr-svc.log` con lo mismo que la consola |
+| ❌ | Parar el servicio con un túnel conectado | En el log: `reversion al parar` |
 
-Ahora rompe algo a propósito —añade una ruta, cambia el DNS de un adaptador— y
-restaura:
-
-```powershell
-& powershell -ExecutionPolicy Bypass -File .\Restore-NetState.ps1 -State $estado
-```
-
-**Si esto no deja la red como estaba, para aquí.** El watchdog entero depende
-de este paso, y sin él conectar un túnel completo es apostarse el equipo.
-
-### 2. El servicio en consola
-
-En consola es más fácil de depurar que como servicio. Como administrador:
+En consola:
 
 ```powershell
-& "C:\Program Files\VpnManager\vpnmgr-svc.exe" --allow-unsigned-catalog
+& "C:\Program Files\VpnManager\svc\vpnmgr-svc.exe" --allow-unsigned-catalog
 ```
 
-Debe escribir el aviso de catálogo sin verificar, decir cuántos perfiles cargó
-y quedarse escuchando. Si el catálogo tiene erratas, las dice todas de una vez:
-edita `C:\ProgramData\VpnManager\profiles.json` y vuelve a arrancar.
+**El servicio de Windows es lo más nuevo y lo que menos confianza me da.** Si
+falla, `sc query VpnManagerSvc` y el log de arriba.
 
-### 3. La bandeja
+## 3. La interfaz
 
-Abre `vpnmgr-ui.exe`. Deberías ver tus perfiles con **«Abrir cliente»** en
-todos: es correcto, porque ningún conector se ha verificado todavía.
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ❌ | La ventana se abre sola al arrancar | Tabla con los 4 perfiles del ejemplo |
+| ❌ | Tipos y estados | «Completo ⚠», «Parcial», «Por aplicación»; estado en color |
+| ❌ | Botones | Todos dicen «Abrir cliente» (ningún conector verificado) |
+| ❌ | Icono en la bandeja | Círculo azul con «V»; puede estar bajo la flecha `^` |
+| ❌ | Clic izquierdo en el icono | Abre la ventana |
+| ❌ | Clic derecho en el icono | Menú con «Abrir VPN Manager» y los perfiles |
+| ❌ | Cerrar la ventana | La aplicación **sigue** en la bandeja |
+| ❌ | Bandeja → Salir | Ahora sí se cierra del todo |
+| ❌ | Parar el servicio con la ventana abierta | En 10 s: «Sin conexión con el servicio» y la tabla se vacía |
+| ❌ | Volver a arrancarlo | En 10 s se rellena sola; en Actividad: «recuperada la conexión» |
 
-Prueba un perfil `APP` o `SPLIT` primero. No tocan la ruta por defecto, así que
-no pueden dejarte fuera.
+## 4. La red — lo que puede dejarte sin conexión
 
-### 4. El watchdog, a propósito
+**Esto es lo más importante de todo el plan.** Hazlo antes de conectar ningún
+túnel.
 
-**Antes de confiar en él.** Con la VM delante y acceso por consola:
+```powershell
+cd "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
+```
 
-1. Conecta un perfil `FULL`.
-2. **Cierra la bandeja** en cuanto acepte.
-3. Espera 90 segundos mirando el log del servicio.
+### 4.1 Fotografiar el estado ✅
 
-Tiene que aparecer una línea de reversión y la red tiene que volver a como
-estaba. Si no aparece, el watchdog no protege nada y no debe salir de la VM.
+```powershell
+$f = "$env:TEMP\estado.json"
+& powershell -ExecutionPolicy Bypass -File .\Get-NetState.ps1 | Set-Content $f -Encoding UTF8
+Get-Content $f
+```
 
-### 5. Un `FULL` de verdad
+Ya validado: devuelve JSON con rutas, DNS y adaptadores.
 
-Solo ahora, y la primera vez con alguien físicamente al lado de la máquina.
+### 4.2 Restaurar ⚠️
 
-## Qué anotar
+```powershell
+# Romper algo, como haría un túnel: una ruta con salto real
+route add 10.99.0.0 mask 255.255.0.0 192.168.0.9
 
-Cada cliente VPN que pruebes va a `CONECTORES.md`: versión exacta, orden
-probada, qué devuelve, y si pide interacción. Es lo que decide si un conector
-puede dejar de ser un simple lanzador.
+& powershell -ExecutionPolicy Bypass -File .\Restore-NetState.ps1 -StatePath $f
 
-Y lo que falle, que fallará: el mensaje de error del log tal cual. Están
-escritos para que digan qué parte no pudo hacerse, no solo que algo no se pudo.
+# Comprobar
+Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.NextHop -ne '0.0.0.0' }
+```
 
-## Lo que esta versión no es
+**Tiene que pasar**: `ok = true`, la `10.99.0.0/16` desaparece, y **tus dos
+rutas por defecto siguen** (`192.168.59.2` y `192.168.0.9`).
 
-- **No está firmada**, ni el ejecutable ni el catálogo.
-- Con `--allow-unsigned-catalog`, quien pueda escribir `profiles.json` en esa
-  máquina elige qué binario ejecuta un servicio que corre como SYSTEM. En una
-  VM de pruebas da igual. En el equipo de un compañero, no.
-- El pipe solo admite Administradores hasta que exista el grupo de AD.
+Si `ok` es `false`, mira el campo `failures`: dice qué parte no se pudo.
 
-Nada de esto se despliega hasta que haya certificado y grupo.
+**Si esto no funciona, no conectes ningún túnel completo.**
+
+### 4.3 La sonda ❌
+
+Con una IP que responda a ping y una red que exista en tu tabla de rutas:
+
+```powershell
+& powershell -ExecutionPolicy Bypass -File .\Test-TunnelState.ps1 `
+    -ProbeIp 192.168.0.9 -TargetNetworks 192.168.0.0/24
+```
+
+**Tiene que pasar**: `adapterUp`, `routed` y `probeAnswers` a `true`, y
+`connected` a `true`.
+
+Prueba también con una IP que no responda: `connected` a `false` y
+`probeAnswers` a `false`, pero los otros dos a `true`. Esa diferencia es la que
+separa un aviso de una caída.
+
+## 5. El catálogo
+
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ⚠️ | Meter una errata a propósito | El servicio las lista **todas** y **no carga ningún perfil** |
+| ⚠️ | Arreglarla | Al reiniciar, los perfiles aparecen |
+| ❌ | Añadir una VPN tuya real | Sale en la ventana |
+
+Edita `C:\ProgramData\VpnManager\profiles.json` (necesitas administrador).
+Reinicia el servicio después de cada cambio: **el catálogo se lee al arrancar**.
+
+## 6. Con una VPN de verdad
+
+Empieza por una **`SPLIT`**. No toca la ruta por defecto, así que no puede
+dejarte fuera.
+
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ❌ | Pulsar «Abrir cliente» en un `SPLIT` | Se abre el cliente oficial **en tu sesión** |
+| ❌ | Conectar a mano en el cliente | La ventana pasa a «conectado» en 10 s |
+| ❌ | Estado real | Si desconectas desde el cliente, pasa a «caído» |
+
+Ese segundo punto es la prueba de fuego de la sonda: el estado tiene que venir
+de la red, no de lo que diga el cliente.
+
+## 7. El watchdog — provócalo a propósito
+
+**Antes de fiarte de él**, y con la VM delante.
+
+1. Añade a tu `profiles.json` un perfil `FULL` con
+   `"breaks_local_connectivity": true`.
+2. Púlsalo en la ventana → tiene que salir el aviso de que perderás la sesión
+   remota. **Cancélalo una vez** para ver que respeta el «no».
+3. Acéptalo.
+4. **Cierra la aplicación entera** (bandeja → Salir).
+5. Espera 90 segundos mirando el log del servicio.
+
+**Tiene que pasar**: una línea de reversión y la red como estaba.
+
+Si no aparece, el watchdog no protege nada y no debe salir de la VM.
+
+## 8. El árbitro
+
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ❌ | Dos perfiles `FULL`, conectar el segundo | Rechaza y dice cuál cerrar a mano |
+| ❌ | Un `SPLIT` con un `FULL` conectado | Conecta, con el aviso de que sus rutas no encaminan nada |
+| ❌ | Un `APP` con un `FULL` conectado | Conecta sin avisos |
+
+Con todos los conectores sin verificar, el rechazo del primer caso es el
+esperado: ninguno sabe desconectar solo.
+
+## 9. Qué anotar
+
+- Cada cliente VPN que pruebes → `docs/CONECTORES.md`: versión exacta, orden
+  probada, qué devuelve, si pide interacción.
+- Todo lo que falle: la línea del log tal cual. Están escritas para decir qué
+  parte no se pudo, no solo que algo no fue.
+
+## Lo que esta versión NO es
+
+- **Sin firmar**, ni el ejecutable ni el catálogo.
+- Con el catálogo sin verificar, quien pueda escribir `profiles.json` elige qué
+  ejecuta el servicio como SYSTEM. En una VM da igual; en un equipo de la
+  empresa, no.
+- El pipe admite a **cualquiera que haya iniciado sesión** en la máquina, no a
+  un grupo de AD. Es más amplio de lo que será en producción.
+
+Nada de esto se despliega hasta que haya certificado y grupo de AD.
