@@ -35,6 +35,8 @@ from typing import Final
 from vpnmanager.core.models import (
     Capability,
     ConnectionState,
+    LaunchKind,
+    LaunchSpec,
     TunnelType,
     is_valid_profile_id,
 )
@@ -180,6 +182,43 @@ class ProfileSummary:
 
 
 @dataclass(frozen=True)
+class LaunchOrder:
+    """Lo que el servicio le pide a la interfaz que arranque en su sesion.
+
+    Un cliente VPN con ventana tiene que aparecer en la sesion del usuario, y
+    el servicio vive en la sesion 0. Como el pipe es sincrono y el servicio no
+    puede empujar mensajes, la orden viaja en la respuesta: "arranca esto y
+    luego confirmame".
+
+    Que aqui si haya una ruta no contradice la regla del protocolo. La regla
+    es que el servicio no **acepta** rutas; esta sale del catalogo firmado y
+    va del proceso privilegiado al que no lo es. La interfaz acaba arrancando
+    un binario con los permisos que el usuario ya tiene. No hay ningun campo
+    en `Request` por el que esto pueda volver.
+    """
+
+    kind: LaunchKind
+    target: str
+    args: tuple[str, ...] = ()
+
+    @staticmethod
+    def from_spec(spec: LaunchSpec) -> LaunchOrder:
+        return LaunchOrder(kind=spec.kind, target=spec.target, args=spec.args)
+
+    def as_payload(self) -> dict[str, object]:
+        return {"kind": self.kind.value, "target": self.target, "args": list(self.args)}
+
+    @staticmethod
+    def from_payload(data: dict[str, object]) -> LaunchOrder:
+        _check_keys(data, allowed=frozenset({"kind", "target", "args"}))
+        return LaunchOrder(
+            kind=_read_enum(data, "kind", LaunchKind),
+            target=_read_string(data, "target"),
+            args=tuple(_read_list_of_strings(data, "args")),
+        )
+
+
+@dataclass(frozen=True)
 class Response:
     """Lo que el servicio contesta.
 
@@ -193,6 +232,7 @@ class Response:
     profiles: tuple[ProfileSummary, ...] = ()
     manual_disconnect_first: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    launch: LaunchOrder | None = None
 
     @staticmethod
     def failure(message: str) -> Response:
@@ -207,6 +247,7 @@ class Response:
             "profiles": [profile.as_payload() for profile in self.profiles],
             "manual_disconnect_first": list(self.manual_disconnect_first),
             "warnings": list(self.warnings),
+            "launch": None if self.launch is None else self.launch.as_payload(),
         }
         return _encode(payload)
 
@@ -224,12 +265,16 @@ class Response:
                     "profiles",
                     "manual_disconnect_first",
                     "warnings",
+                    "launch",
                 }
             ),
         )
         _check_version(data)
 
         state_value = data.get("state")
+        launch_value = data.get("launch")
+        if launch_value is not None and not isinstance(launch_value, dict):
+            raise ProtocolError("el campo 'launch' debe ser un objeto o estar ausente")
         return Response(
             ok=_read_bool(data, "ok"),
             message=_read_string(data, "message", default=""),
@@ -240,6 +285,7 @@ class Response:
             ),
             manual_disconnect_first=tuple(_read_list_of_strings(data, "manual_disconnect_first")),
             warnings=tuple(_read_list_of_strings(data, "warnings")),
+            launch=None if launch_value is None else LaunchOrder.from_payload(dict(launch_value)),
         )
 
 

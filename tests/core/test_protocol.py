@@ -13,12 +13,19 @@ import json
 
 import pytest
 
-from vpnmanager.core.models import Capability, ConnectionState, TunnelType
+from vpnmanager.core.models import (
+    Capability,
+    ConnectionState,
+    LaunchKind,
+    LaunchSpec,
+    TunnelType,
+)
 from vpnmanager.core.protocol import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
     Command,
+    LaunchOrder,
     MessageStream,
     ProfileSummary,
     ProtocolError,
@@ -276,21 +283,72 @@ def test_capabilities_travel_by_name() -> None:
 
 
 def test_a_summary_carries_nothing_the_interface_does_not_need() -> None:
-    """Ni ruta del binario, ni argumentos, ni rutas de red: no viajan."""
-    encoded = Response(
-        ok=True,
-        profiles=(
-            ProfileSummary(
-                id="wireguard-corp",
-                display_name="WireGuard corporativa",
-                tunnel_type=TunnelType.FULL,
-                state=ConnectionState.CONNECTED,
-            ),
-        ),
-    ).encode()
+    """Ni ruta del binario, ni argumentos, ni rutas de red: no viajan.
 
-    for forbidden in (b"launch", b"target", b"args", b"routes", b"dns", b"probe_ip"):
-        assert forbidden not in encoded
+    Se mira el resumen y no la respuesta entera, porque la respuesta si puede
+    llevar una `LaunchOrder`: esa va del servicio a la interfaz a proposito.
+    """
+    payload = ProfileSummary(
+        id="wireguard-corp",
+        display_name="WireGuard corporativa",
+        tunnel_type=TunnelType.FULL,
+        state=ConnectionState.CONNECTED,
+    ).as_payload()
+
+    for forbidden in ("launch", "target", "args", "routes", "dns", "probe_ip"):
+        assert forbidden not in payload
+
+
+def test_a_launch_order_survives_the_round_trip() -> None:
+    """La orden que el servicio le da a la interfaz para que arranque el cliente."""
+    response = Response(
+        ok=True,
+        state=ConnectionState.LAUNCHING,
+        launch=LaunchOrder(
+            kind=LaunchKind.EXE,
+            target=r"C:\Program Files\WireGuard\wireguard.exe",
+            args=("/installtunnelservice",),
+        ),
+    )
+
+    assert Response.decode(response.encode()) == response
+
+
+def test_a_response_without_a_launch_order_decodes_to_none() -> None:
+    assert Response.decode(Response(ok=True).encode()).launch is None
+
+
+def test_a_launch_order_is_built_from_the_catalog_spec() -> None:
+    """No se compone a mano: sale tal cual del perfil firmado."""
+    spec = LaunchSpec(kind=LaunchKind.MSIX, target="Fabrikam.Vpn_abc!App", args=("-quiet",))
+
+    order = LaunchOrder.from_spec(spec)
+
+    assert order.kind is spec.kind
+    assert order.target == spec.target
+    assert order.args == spec.args
+
+
+@pytest.mark.parametrize(
+    "launch",
+    ["no soy un objeto", 42, [{"kind": "exe"}], {"kind": "exe", "target": 1}, {"kind": "bat"}],
+)
+def test_a_malformed_launch_order_is_rejected(launch: object) -> None:
+    with pytest.raises(ProtocolError):
+        Response.decode(raw(version=PROTOCOL_VERSION, ok=True, launch=launch))
+
+
+def test_no_request_can_carry_a_launch_order_back() -> None:
+    """La orden va del proceso privilegiado al que no lo es, y solo en ese sentido."""
+    with pytest.raises(ProtocolError, match="campos que no existen"):
+        Request.decode(
+            raw(
+                version=PROTOCOL_VERSION,
+                command="connect",
+                profile_id="wireguard-corp",
+                launch={"kind": "exe", "target": r"C:\temp\mio.exe"},
+            )
+        )
 
 
 def test_failure_response() -> None:
