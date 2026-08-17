@@ -37,6 +37,22 @@ ORCHESTRATOR = SRC / "service" / "orchestrator.py"
 DISPATCHER = SRC / "service" / "dispatcher.py"
 PROVIDERS = SRC / "connectors" / "providers.py"
 UI_CLIENT = SRC / "ui" / "client.py"
+TRAY = SRC / "ui" / "tray.py"
+
+# Lo unico que la bandeja puede importar del proyecto. Es el unico modulo
+# exento de mypy y de tests —sin PySide6 no hay nada que comprobar, y PySide6
+# necesita un escritorio— asi que a cambio se le exige seguir siendo tonta: si
+# necesita el arbitro o el watchdog, es que se le ha metido logica dentro y esa
+# logica le corresponde a ui/client.py.
+TRAY_MAY_IMPORT = frozenset(
+    {
+        "vpnmanager.ui.client",
+        "vpnmanager.ui.transport",
+        "vpnmanager.core.models",
+        "vpnmanager.core.protocol",
+        "vpnmanager.connectors.process",
+    }
+)
 
 # Modulos que atan un modulo puro a Windows, a la red o a un proceso externo.
 FORBIDDEN_MODULES = frozenset(
@@ -138,7 +154,26 @@ def test_the_modules_under_watch_exist() -> None:
     assert ORCHESTRATOR.is_file()
     assert DISPATCHER.is_file()
     assert UI_CLIENT.is_file()
+    assert TRAY.is_file()
     assert len(PLATFORM_FREE_MODULES) >= 8
+
+
+def test_the_tray_stays_thin() -> None:
+    """El unico modulo exento tiene que seguir sin decidir nada.
+
+    Si esto falla, la pregunta no es que añadir a la lista: es que hace ese
+    modulo importando logica que no puede probar nadie.
+    """
+    tree = ast.parse(TRAY.read_text(encoding="utf-8"))
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("vpnmanager")
+    }
+
+    assert imported <= TRAY_MAY_IMPORT, (
+        f"la bandeja importa de mas: {sorted(imported - TRAY_MAY_IMPORT)}"
+    )
 
 
 # Los tres tests siguientes prueban al guardian, no al codigo: un guardian que

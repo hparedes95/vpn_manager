@@ -108,14 +108,20 @@ queda son adaptadores de plataforma y dos decisiones pendientes:
   Escritos pero **sin ejecutar nunca**: no hay Windows en CI. Sus tests
   comprueban qué se le pide al sistema, no qué contesta.
 
+- **Conectores, interfaz y bandeja, completados**: los ocho clientes como
+  `LauncherConnector`, el cliente del protocolo y la bandeja PySide6.
+
 | Falta | Bloqueado por |
 |---|---|
+| Servidor del pipe (transporte) y anfitrión del servicio | Windows y pywin32 |
 | `CatalogVerifier` de verdad | Decidir el esquema de firma |
-| Servidor del pipe con ACL | El grupo de AD |
-| UI PySide6 y el `UserSessionLauncher` real | — |
-| Los ocho conectores por proveedor | — |
 | Empaquetado PyInstaller + Intune | Certificado de firma |
 | Verificar `docs/CONECTORES.md` | Un puesto real con los clientes |
+
+`ui/tray.py` es el **único** módulo exento de tipado y de tests: sin PySide6 no
+hay nada que comprobar, y PySide6 necesita un escritorio que CI no tiene. A
+cambio hay un test que le exige seguir siendo tonta — si empieza a importar el
+árbitro o el watchdog, es que se le ha metido lógica que nadie puede probar.
 
 Los conectores y las versiones de cliente verificadas se anotan en
 [`docs/CONECTORES.md`](docs/CONECTORES.md). Hoy no hay ninguna verificada.
