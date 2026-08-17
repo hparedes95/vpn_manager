@@ -234,6 +234,39 @@ class Profile:
         return issues
 
 
+@dataclass(frozen=True)
+class ProbeResult:
+    """Las tres comprobaciones del estado real, por separado.
+
+    Por separado y no un si o un no, porque la diferencia entre "el tunel esta
+    montado pero no pasa trafico" y "no hay tunel" es la que separa un aviso
+    de una caida, y al usuario le cambia mucho lo que tiene que hacer.
+    """
+
+    adapter_up: bool = False
+    routed: bool = False
+    probe_answers: bool = False
+    # False si la comprobacion no se pudo hacer. No es lo mismo que fallar:
+    # no saber no es lo mismo que saber que no.
+    checked: bool = True
+
+    @property
+    def connected(self) -> bool:
+        return self.adapter_up and self.routed and self.probe_answers
+
+    def state(self, *, previous: ConnectionState) -> ConnectionState:
+        """El estado que corresponde. `previous` se conserva si no se pudo mirar."""
+        if not self.checked:
+            return previous
+        if self.connected:
+            return ConnectionState.CONNECTED
+        if self.adapter_up and self.routed:
+            # El tunel esta montado y la ruta puesta, pero la IP testigo no
+            # contesta: hay algo, y no sirve del todo.
+            return ConnectionState.DEGRADED
+        return ConnectionState.DOWN
+
+
 @dataclass
 class Session:
     """Estado vivo de un perfil. Lo mantiene el servicio, no la interfaz."""

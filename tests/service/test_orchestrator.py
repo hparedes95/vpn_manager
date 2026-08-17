@@ -22,6 +22,7 @@ from vpnmanager.core.models import (
     DisconnectStrategy,
     LaunchKind,
     LaunchSpec,
+    ProbeResult,
     Profile,
     Result,
     TunnelType,
@@ -31,7 +32,13 @@ from vpnmanager.core.watchdog import NetworkSnapshot, Watchdog
 from vpnmanager.service.orchestrator import Orchestrator
 
 WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
-SNAPSHOT = NetworkSnapshot(routes=("0.0.0.0/0 via 192.168.1.1",), dns=("192.168.1.1",))
+SNAPSHOT = NetworkSnapshot(
+    routes=("0.0.0.0/0 via 192.168.1.1",),
+    dns=("192.168.1.1",),
+    # Sin payload la foto no sirve para restaurar, y el orquestador se
+    # niega a conectar un tunel completo sin marcha atras.
+    payload='{"ok":true,"routes":[],"dns":[]}',
+)
 
 
 # --------------------------------------------------------------------------
@@ -75,10 +82,11 @@ class FakeNetwork:
         self.snapshots = 0
         self.restored: list[NetworkSnapshot] = []
         self.restore_works = True
+        self.snapshot_works = True
 
     def snapshot(self) -> NetworkSnapshot:
         self.snapshots += 1
-        return SNAPSHOT
+        return SNAPSHOT if self.snapshot_works else NetworkSnapshot()
 
     def restore(self, snapshot: NetworkSnapshot) -> bool:
         self.restored.append(snapshot)
@@ -86,15 +94,23 @@ class FakeNetwork:
 
 
 class FakeProbe:
-    """La sonda de red. Por defecto dice que todo esta bien."""
+    """La sonda de red. Por defecto dice que las tres comprobaciones pasan."""
 
     def __init__(self, connected: bool = True) -> None:
-        self.connected = connected
+        self.result = ProbeResult(adapter_up=connected, routed=connected, probe_answers=connected)
         self.calls: list[str] = []
 
-    def is_really_connected(self, profile: Profile) -> bool:
+    def check(self, profile: Profile) -> ProbeResult:
         self.calls.append(profile.id)
-        return self.connected
+        return self.result
+
+    @property
+    def connected(self) -> bool:
+        return self.result.connected
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        self.result = ProbeResult(adapter_up=value, routed=value, probe_answers=value)
 
 
 class FakeClock:
@@ -319,6 +335,53 @@ def test_a_failed_connection_disarms_the_watchdog(
     clock.advance(120.0)
     assert orchestrator.tick() == ()
     assert network.restored == []
+
+
+def test_a_full_is_not_connected_when_the_network_cannot_be_photographed(
+    orchestrator: Orchestrator, network: FakeNetwork, wireguard: FullConnector
+) -> None:
+    """Sin foto no hay marcha atras, y sin marcha atras no se apuesta el equipo."""
+    network.snapshot_works = False
+
+    response = orchestrator.handle(connect("full-a"))
+
+    assert not response.ok
+    assert "deshacer la conexion" in response.message
+    assert wireguard.connected == []
+
+
+def test_a_split_connects_even_without_a_photograph(
+    orchestrator: Orchestrator, network: FakeNetwork
+) -> None:
+    """Un SPLIT no arma watchdog porque no puede dejar el equipo incomunicado."""
+    network.snapshot_works = False
+
+    assert orchestrator.handle(connect("split-a")).ok
+
+
+def test_a_tunnel_that_is_up_but_does_not_answer_is_degraded(
+    orchestrator: Orchestrator, probe: FakeProbe
+) -> None:
+    """La ruta esta y el adaptador tambien, pero por ahi no pasa trafico."""
+    orchestrator.handle(connect("full-a"))
+    probe.result = ProbeResult(adapter_up=True, routed=True, probe_answers=False)
+
+    response = orchestrator.handle(Request(command=Command.STATUS, profile_id="full-a"))
+
+    assert response.state is ConnectionState.DEGRADED
+
+
+def test_a_probe_that_could_not_run_does_not_change_the_state(
+    orchestrator: Orchestrator, probe: FakeProbe
+) -> None:
+    """No saber no es lo mismo que saber que no: un fallo de la sonda no
+    puede verse como un tunel roto y disparar desconexiones que nadie pidio."""
+    orchestrator.handle(connect("full-a"))
+    probe.result = ProbeResult(checked=False)
+
+    response = orchestrator.handle(Request(command=Command.STATUS, profile_id="full-a"))
+
+    assert response.state is ConnectionState.CONNECTED
 
 
 def test_a_profile_governed_by_nobody_cannot_be_connected(orchestrator: Orchestrator) -> None:

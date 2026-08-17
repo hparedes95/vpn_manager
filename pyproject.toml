@@ -22,6 +22,11 @@ dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Los .ps1 son codigo, no documentacion: sin ellos el servicio no sabe leer ni
+# restaurar la red. Tienen que viajar dentro del paquete.
+[tool.setuptools.package-data]
+vpnmanager = ["net/ps/*.ps1"]
+
 [tool.pytest.ini_options]
 # pythonpath evita tener que instalar el paquete para lanzar los tests.
 pythonpath = ["src"]

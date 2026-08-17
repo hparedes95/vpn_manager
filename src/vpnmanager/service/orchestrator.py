@@ -36,7 +36,13 @@ from typing import Protocol
 
 from vpnmanager.connectors.base import ConnectorRegistry
 from vpnmanager.core.arbiter import TunnelArbiter
-from vpnmanager.core.models import Capability, ConnectionState, Profile, Session
+from vpnmanager.core.models import (
+    Capability,
+    ConnectionState,
+    ProbeResult,
+    Profile,
+    Session,
+)
 from vpnmanager.core.protocol import (
     Command,
     ProfileSummary,
@@ -62,11 +68,11 @@ class ConnectionProbe(Protocol):
     """Puerto: quien sabe si un perfil esta conectado **de verdad**.
 
     Adaptador activo, ruta hacia la red destino y respuesta de la IP testigo.
-    Las tres. El icono del cliente oficial no es fuente de verdad y por eso no
-    aparece por ningun lado en este modulo.
+    Las tres, y por separado. El icono del cliente oficial no es fuente de
+    verdad y por eso no aparece por ningun lado en este modulo.
     """
 
-    def is_really_connected(self, profile: Profile) -> bool: ...
+    def check(self, profile: Profile) -> ProbeResult: ...
 
 
 class Orchestrator:
@@ -188,7 +194,16 @@ class Orchestrator:
         # conectar: si la conexion deja el equipo incomunicado, la reversion ya
         # esta programada.
         if plan.needs_watchdog:
-            self._watchdog.arm(profile.id, self._network.snapshot())
+            snapshot = self._network.snapshot()
+            if not snapshot.usable:
+                # Sin foto no hay marcha atras, y un tunel completo sin marcha
+                # atras es apostarse el equipo a que no falle nada. No se
+                # conecta: es preferible quedarse sin VPN a quedarse sin equipo.
+                return Response.failure(
+                    "no se pudo guardar el estado de red, asi que no habria forma de "
+                    "deshacer la conexion: no se conecta un tunel completo a ciegas"
+                )
+            self._watchdog.arm(profile.id, snapshot)
 
         result = (
             connector.connect(profile)
@@ -267,17 +282,16 @@ class Orchestrator:
         session = self._session(profile.id)
         if session.state in (ConnectionState.DISCONNECTED, ConnectionState.ERROR):
             return session.state
+
+        probed = self._probe.check(profile)
         if session.state in (ConnectionState.LAUNCHING, ConnectionState.WAITING_AUTH):
-            # Todavia esta en ello: si ya responde, es que ha terminado.
-            if self._probe.is_really_connected(profile):
+            # Todavia esta en ello. Solo se avanza si responde del todo: un
+            # tunel a medio montar sigue estando a medio montar.
+            if probed.connected:
                 session.state = ConnectionState.CONNECTED
             return session.state
 
-        session.state = (
-            ConnectionState.CONNECTED
-            if self._probe.is_really_connected(profile)
-            else ConnectionState.DOWN
-        )
+        session.state = probed.state(previous=session.state)
         return session.state
 
     def _force_disconnect(self, profile: Profile) -> None:

@@ -103,13 +103,18 @@ paquetes están creados pero vacíos a propósito: no hay esqueletos con
 **Todo lo que se puede escribir sin un Windows delante está escrito.** Lo que
 queda son adaptadores de plataforma y dos decisiones pendientes:
 
+- **`connectors/process.py` y `net/`, completados**: el lanzador de procesos, los
+  tres `.ps1` versionados, la sonda de estado real y la foto/restauración de red.
+  Escritos pero **sin ejecutar nunca**: no hay Windows en CI. Sus tests
+  comprueban qué se le pide al sistema, no qué contesta.
+
 | Falta | Bloqueado por |
 |---|---|
-| `ProcessLauncher` de Windows | Decidir quién lanza el cliente (ver [`connectors/README.md`](src/vpnmanager/connectors/README.md)) |
 | `CatalogVerifier` de verdad | Decidir el esquema de firma |
-| `net/` con sus `.ps1` y la sonda | Windows |
-| Servidor del pipe con ACL | Windows y el grupo de AD |
-| UI PySide6 | — |
+| Servidor del pipe con ACL | El grupo de AD |
+| UI PySide6 y el `UserSessionLauncher` real | — |
+| Los ocho conectores por proveedor | — |
+| Empaquetado PyInstaller + Intune | Certificado de firma |
 | Verificar `docs/CONECTORES.md` | Un puesto real con los clientes |
 
 Los conectores y las versiones de cliente verificadas se anotan en

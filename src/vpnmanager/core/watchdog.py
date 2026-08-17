@@ -36,10 +36,26 @@ class NetworkSnapshot:
 
     Lo rellena `net/`, que es quien sabe leerla. Aqui solo se guarda para
     poder devolverla intacta cuando haya que deshacer.
+
+    `routes` y `dns` son un resumen legible, para el log y para la interfaz.
+    `payload` es lo que `net/` necesita de verdad para restaurar, en su propio
+    formato, y el nucleo no lo interpreta: si lo interpretara, tendria que
+    saber de tablas de rutas de Windows, y entonces dejaria de ser portable.
     """
 
     routes: tuple[str, ...] = ()
     dns: tuple[str, ...] = ()
+    payload: str = ""
+
+    @property
+    def usable(self) -> bool:
+        """Si con esta foto se puede restaurar algo.
+
+        Una foto vacia no es una foto de una red vacia: es que no se pudo
+        sacar. Armar el watchdog con ella seria confiar en un seguro que no
+        tiene nada dentro.
+        """
+        return bool(self.payload)
 
 
 @dataclass(frozen=True)
