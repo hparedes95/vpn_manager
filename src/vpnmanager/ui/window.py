@@ -84,11 +84,19 @@ class MainWindow(QWidget):
         self._journal.setMaximumHeight(120)
         self._journal.setFont(QFont("Consolas", 9))
 
+        manage = QPushButton("Gestionar VPN…")
+        manage.setToolTip(
+            "Anadir o quitar VPN del catalogo. Pide permisos de administrador: ese "
+            "fichero decide que ejecuta el servicio como SYSTEM."
+        )
+        manage.clicked.connect(self._open_editor)
+
         refresh = QPushButton("Actualizar")
         refresh.clicked.connect(self.refresh_now)
 
         top = QHBoxLayout()
         top.addWidget(self._status, 1)
+        top.addWidget(manage)
         top.addWidget(refresh)
 
         layout = QVBoxLayout(self)
@@ -131,6 +139,27 @@ class MainWindow(QWidget):
         return button
 
     # -- Acciones ----------------------------------------------------------
+
+    def _open_editor(self) -> None:
+        """Abre el editor, elevado y en otro proceso.
+
+        Esta ventana corre sin privilegios a proposito y no puede escribir el
+        catalogo: si pudiera, cualquier usuario del puesto elegiria que ejecuta
+        el servicio como SYSTEM.
+        """
+        from vpnmanager.ui.editor import relaunch_elevated
+
+        if relaunch_elevated():
+            self.note("· editor del catalogo abierto (como administrador)")
+        else:
+            self.note("✕ hace falta ser administrador para cambiar el catalogo")
+            QMessageBox.information(
+                self,
+                "Hacen falta permisos de administrador",
+                "El catalogo decide que binario ejecuta el servicio como SYSTEM, asi "
+                "que solo lo puede cambiar un administrador.\n\nEs la misma "
+                "proteccion que impide editarlo con el Bloc de notas.",
+            )
 
     def refresh_now(self) -> None:
         """Lo rellena la bandeja en su ciclo; esto solo lo adelanta."""

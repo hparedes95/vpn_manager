@@ -53,6 +53,11 @@ TRAY_MAY_IMPORT = frozenset(
         "vpnmanager.core.protocol",
         "vpnmanager.connectors.process",
         "vpnmanager.ui.window",
+        "vpnmanager.ui.editor",
+        # El editor corre elevado y en otro proceso: es el unico sitio de la
+        # interfaz que toca el catalogo, y por eso puede importarlo.
+        "vpnmanager.security.catalog",
+        "vpnmanager.connectors.providers",
     }
 )
 
@@ -167,7 +172,10 @@ def test_the_tray_stays_thin() -> None:
     Si esto falla, la pregunta no es que añadir a la lista: es que hace ese
     modulo importando logica que no puede probar nadie.
     """
-    tree = ast.parse(TRAY.read_text(encoding="utf-8") + WINDOW.read_text(encoding="utf-8"))
+    sources = "".join(
+        path.read_text(encoding="utf-8") for path in (TRAY, WINDOW, SRC / "ui" / "editor.py")
+    )
+    tree = ast.parse(sources)
     imported = {
         node.module
         for node in ast.walk(tree)

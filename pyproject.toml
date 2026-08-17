@@ -57,7 +57,7 @@ files = ["src", "tests"]
 # se instala en CI porque necesita un escritorio. Es el unico fichero exento,
 # y por eso tiene que seguir siendo fino: todo lo que decide algo esta en
 # ui/client.py, que si se comprueba.
-exclude = "src/vpnmanager/(ui/tray|ui/window|service/pipe|service/winservice)\\.py$"
+exclude = "src/vpnmanager/(ui/tray|ui/window|ui/editor|service/pipe|service/winservice)\\.py$"
 
 [[tool.mypy.overrides]]
 module = ["PySide6.*", "ntsecuritycon", "win32pipe", "win32api", "win32file", "win32pipe", "win32security", "win32service", "win32serviceutil", "pywintypes", "servicemanager"]

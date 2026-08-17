@@ -232,6 +232,22 @@ def main() -> int:
 
 def _run() -> int:
     app = QApplication(sys.argv)
+
+    if "--editar-catalogo" in sys.argv:
+        # Este proceso es el editor: lo ha lanzado la ventana pidiendo
+        # elevacion. No monta bandeja ni habla con el servicio.
+        from vpnmanager.ui.editor import CatalogEditor, is_elevated
+
+        if not is_elevated():
+            QMessageBox.critical(
+                None,
+                "VPN Manager",
+                "El editor del catalogo necesita permisos de administrador.",
+            )
+            return 1
+        log.info("abriendo el editor del catalogo")
+        CatalogEditor().exec()
+        return 0
     app.setQuitOnLastWindowClosed(False)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():

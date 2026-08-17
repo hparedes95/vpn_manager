@@ -28,7 +28,7 @@ tarde; media carga silenciosa se diagnostica en una semana.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Protocol
@@ -108,6 +108,73 @@ class CatalogLoad:
 
 class _FieldError(Exception):
     """Problema de forma en el JSON. Interno: sale como incidencia, no sube."""
+
+
+def dump_catalog(profiles: Sequence[Profile]) -> bytes:
+    """Serializa un catalogo, para que lo escriba un editor con privilegios.
+
+    Lo contrario de `load_catalog`, y con la misma exigencia: se validan los
+    perfiles antes de escribir. Un catalogo mal escrito no arranca ningun
+    perfil, asi que guardarlo sin mirar seria dejar el equipo sin VPN hasta
+    que alguien leyera el log.
+
+    Escribir esto **no lo puede hacer la interfaz sin privilegios**. El
+    fichero define que binario ejecuta un servicio en SYSTEM: quien lo escriba
+    tiene que ser alguien que ya pudiera hacerlo con un editor de texto.
+    """
+    issues = [
+        f"'{p.id or f'perfil[{i}]'}': {issue}"
+        for i, p in enumerate(profiles)
+        for issue in p.validate()
+    ]
+    issues.extend(_duplicate_issues(list(profiles)))
+    if issues:
+        raise ValueError("; ".join(issues))
+
+    payload = {
+        "version": CATALOG_VERSION,
+        "profiles": [_profile_payload(profile) for profile in profiles],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _profile_payload(profile: Profile) -> dict[str, object]:
+    """Solo lo que no es el valor por defecto: el fichero se lee a mano."""
+    data: dict[str, object] = {
+        "id": profile.id,
+        "display_name": profile.display_name,
+        "connector": profile.connector,
+        "launch": _launch_payload(profile.launch),
+        "tunnel_type": profile.tunnel_type.value,
+    }
+    if profile.target_networks:
+        data["target_networks"] = list(profile.target_networks)
+    if profile.probe_ip is not None:
+        data["probe_ip"] = profile.probe_ip
+    if profile.dns:
+        data["dns"] = list(profile.dns)
+    if profile.routes:
+        data["routes"] = list(profile.routes)
+    if profile.post_connect_apps:
+        data["post_connect_apps"] = [_launch_payload(app) for app in profile.post_connect_apps]
+    if profile.expected_client_version is not None:
+        data["expected_client_version"] = profile.expected_client_version
+    if profile.breaks_local_connectivity:
+        data["breaks_local_connectivity"] = True
+    if profile.disconnect_strategy is not DisconnectStrategy.NONE:
+        data["disconnect_strategy"] = profile.disconnect_strategy.value
+    if profile.notes:
+        data["notes"] = profile.notes
+    return data
+
+
+def _launch_payload(spec: LaunchSpec) -> dict[str, object]:
+    data: dict[str, object] = {"kind": spec.kind.value, "target": spec.target}
+    if spec.args:
+        data["args"] = list(spec.args)
+    if spec.context is not LaunchContext.USER_SESSION:
+        data["context"] = spec.context.value
+    return data
 
 
 def load_catalog(

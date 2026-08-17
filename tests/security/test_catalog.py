@@ -13,11 +13,18 @@ from pathlib import Path
 
 import pytest
 
-from vpnmanager.core.models import DisconnectStrategy, LaunchKind, TunnelType
+from vpnmanager.core.models import (
+    DisconnectStrategy,
+    LaunchKind,
+    LaunchSpec,
+    Profile,
+    TunnelType,
+)
 from vpnmanager.security.catalog import (
     CATALOG_VERSION,
     CatalogLoad,
     RejectingVerifier,
+    dump_catalog,
     load_catalog,
 )
 
@@ -395,3 +402,69 @@ def test_the_documented_example_catalog_loads() -> None:
         "ivanti-cliente-b",
         "wireguard-central",
     ]
+
+
+# --------------------------------------------------------------------------
+# Escribir el catalogo, para el editor con privilegios
+# --------------------------------------------------------------------------
+
+
+def test_what_is_written_can_be_read_back() -> None:
+    """Ida y vuelta: es lo que hace fiable escribir el catalogo desde una interfaz."""
+    original = load(
+        profile_entry(
+            routes=["10.0.0.0/8"],
+            dns=["10.0.0.53"],
+            breaks_local_connectivity=True,
+            disconnect_strategy="cli",
+            notes="la de la central",
+        )
+    )
+
+    written = dump_catalog(original.profiles)
+    again = load_catalog(written, SIGNATURE, AcceptingVerifier())
+
+    assert again.issues == ()
+    assert again.profiles == original.profiles
+
+
+def test_an_invalid_profile_is_never_written() -> None:
+    """Guardar sin mirar dejaria el equipo sin VPN hasta que alguien leyera el log."""
+    broken = Profile(
+        id="roto",
+        display_name="Roto",
+        connector="wireguard",
+        launch=LaunchSpec(kind=LaunchKind.EXE, target="wireguard.exe"),
+        tunnel_type=TunnelType.FULL,
+        probe_ip="10.20.0.1",
+    )
+
+    with pytest.raises(ValueError, match="ruta absoluta"):
+        dump_catalog([broken])
+
+
+def test_a_repeated_id_is_never_written() -> None:
+    original = load(profile_entry()).profiles
+
+    with pytest.raises(ValueError, match="repetido"):
+        dump_catalog([*original, *original])
+
+
+def test_only_what_is_not_the_default_is_written() -> None:
+    """El fichero se lee a mano: no se llena de valores por defecto."""
+    written = dump_catalog(load(profile_entry()).profiles).decode("utf-8")
+
+    assert "breaks_local_connectivity" not in written
+    assert "post_connect_apps" not in written
+    assert "notes" not in written
+
+
+def test_it_is_written_to_be_read_by_a_person() -> None:
+    written = dump_catalog(load(profile_entry()).profiles).decode("utf-8")
+
+    assert "\n" in written  # con sangrado, no en una sola linea
+    assert written.startswith("{")
+
+
+def test_an_empty_catalog_can_be_written() -> None:
+    assert load_catalog(dump_catalog([]), SIGNATURE, AcceptingVerifier()).ok
