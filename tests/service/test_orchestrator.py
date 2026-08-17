@@ -683,3 +683,70 @@ def test_an_unregistered_connector_is_reported_for_every_command(
 def test_the_connector_interface_is_the_only_way_in(orchestrator: Orchestrator) -> None:
     """El orquestador no habla con procesos: habla con conectores."""
     assert issubclass(FullConnector, Connector)
+
+
+# --------------------------------------------------------------------------
+# Fallos encontrados en la revision: que no vuelvan
+# --------------------------------------------------------------------------
+
+
+class StubbornConnector(FullConnector):
+    """Acepta la orden de desconectar y no la cumple. Pasa de verdad."""
+
+    def _disconnect(self, profile: Profile) -> Result:
+        self.disconnected.append(profile.id)
+        return Result.failure("el cliente no solto el tunel")
+
+
+def test_a_failed_eviction_does_not_let_a_second_full_connect(
+    launcher: FakeLauncher, network: FakeNetwork, probe: FakeProbe
+) -> None:
+    """Dos tuneles completos a la vez es justo lo que el arbitro existe para impedir."""
+    stubborn = StubbornConnector(name="wireguard", launcher=launcher)
+    registry = ConnectorRegistry()
+    registry.register(stubborn)
+    orchestrator = Orchestrator(CATALOG, registry, network, probe)
+    orchestrator.handle(connect("full-a"))
+
+    response = orchestrator.handle(connect("full-b"))
+
+    assert not response.ok
+    assert "no se pudo desconectar" in response.message
+    assert stubborn.connected == ["full-a"]
+
+
+def test_disconnecting_a_client_that_cannot_be_told_keeps_the_watchdog(
+    orchestrator: Orchestrator, network: FakeNetwork, clock: FakeClock
+) -> None:
+    """Desarmar un tunel que sigue arriba deja el equipo sin marcha atras.
+
+    `solo-abrir` lo gobierna un conector sin DISCONNECT, asi que pedir la
+    desconexion no la consigue: el tunel sigue montado y la ventana tiene que
+    seguir armada.
+    """
+    orchestrator.handle(connect("solo-abrir"))
+    response = orchestrator.handle(Request(command=Command.DISCONNECT, profile_id="solo-abrir"))
+    assert not response.ok
+
+    clock.advance(120.0)
+
+    assert len(orchestrator.tick()) == 1
+    assert network.restored == [SNAPSHOT]
+
+
+def test_stopping_the_service_undoes_what_is_still_armed(
+    orchestrator: Orchestrator, network: FakeNetwork, wireguard: FullConnector
+) -> None:
+    """Al parar no queda nadie vigilando: la ventana ya no protege de nada."""
+    orchestrator.handle(connect("full-rdp", confirmed=True))
+
+    reversions = orchestrator.shutdown()
+
+    assert len(reversions) == 1
+    assert "parando" in reversions[0].message
+    assert network.restored == [SNAPSHOT]
+    assert wireguard.disconnected == ["full-rdp"]
+
+
+def test_stopping_with_nothing_armed_does_nothing(orchestrator: Orchestrator) -> None:
+    assert orchestrator.shutdown() == ()

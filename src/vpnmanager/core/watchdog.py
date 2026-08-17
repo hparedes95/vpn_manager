@@ -151,6 +151,21 @@ class Watchdog:
             for armed in expired
         )
 
+    def revert_all(self, reason: str) -> tuple[Reversion, ...]:
+        """Todo lo armado, haya vencido o no, y lo descuenta.
+
+        Para cuando el servicio se para: una ventana abierta protege porque
+        alguien la vigila, y al irse ya no hay nadie. Dejar un tunel completo
+        arriba sin vigilante es exactamente lo que este modulo existe para
+        impedir.
+        """
+        armed = list(self._armed.values())
+        self._armed.clear()
+        return tuple(
+            Reversion(profile_id=entry.profile_id, snapshot=entry.snapshot, reason=reason)
+            for entry in armed
+        )
+
     def is_armed(self, profile_id: str) -> bool:
         return profile_id in self._armed
 

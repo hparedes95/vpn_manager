@@ -39,13 +39,31 @@ function Write-Result {
 }
 
 try {
-    # 1. Hay algun adaptador levantado que no sea el de siempre. No se busca
-    #    por nombre de fabricante: cambian entre versiones y entre clientes.
-    $adapterUp = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' }).Count -gt 0
-
-    # 2. Hay ruta hacia cada red destino declarada en el perfil.
+    # 1. Hay un adaptador levantado que lleve a la red destino. Contar
+    #    cualquier adaptador 'Up' no dice nada: en un portatil con wifi
+    #    siempre hay uno, y la comprobacion seria cierta con el tunel caido.
+    #    Se mira el interfaz por el que sale la ruta hacia cada red destino.
     $networks = @($TargetNetworks -split ',' | Where-Object { $_ })
-    $routed = $true
+    $tunnelInterfaces = @()
+    foreach ($network in $networks) {
+        $tunnelInterfaces += @(
+            Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $network.Trim() -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty InterfaceIndex
+        )
+    }
+    $adapterUp = if ($tunnelInterfaces.Count -gt 0) {
+        @(
+            Get-NetAdapter -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Up' -and $tunnelInterfaces -contains [int] $_.ifIndex }
+        ).Count -gt 0
+    } else {
+        $false
+    }
+
+    # 2. Hay ruta hacia cada red destino declarada en el perfil. Sin redes
+    #    declaradas no se puede afirmar nada: mejor decir que no que dar por
+    #    buena una comprobacion que no se ha hecho.
+    $routed = ($networks.Count -gt 0)
     foreach ($network in $networks) {
         $hasRoute = @(
             Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -56,8 +74,21 @@ try {
 
     # 3. La IP testigo interna responde. Es la unica que demuestra que por el
     #    tunel pasa trafico de verdad y no solo que exista un adaptador.
-    $answers = Test-Connection -TargetName $ProbeIp -Count 1 -TimeoutSeconds $TimeoutSeconds `
-                               -Quiet -ErrorAction SilentlyContinue
+    #    Test-Connection cambia de parametros entre Windows PowerShell 5.1 y
+    #    PowerShell 7 (-ComputerName frente a -TargetName, y -TimeoutSeconds
+    #    no existe en 5.1). Se usa Ping directamente, que es igual en las dos
+    #    y ademas permite fijar el tiempo de espera de verdad.
+    $ping = New-Object System.Net.NetworkInformation.Ping
+    try {
+        $reply = $ping.Send($ProbeIp, $TimeoutSeconds * 1000)
+        $answers = ($reply.Status -eq [System.Net.NetworkInformation.IPStatus]::Success)
+    }
+    catch {
+        $answers = $false
+    }
+    finally {
+        $ping.Dispose()
+    }
 
     Write-Result @{
         ok         = $true

@@ -75,9 +75,15 @@ def run_watchdog_loop(orchestrator: Orchestrator, stop: threading.Event) -> None
     el caso que justifica todo esto es precisamente que no llegue ninguna.
     """
     while not stop.is_set():
-        for reversion in orchestrator.tick():
-            level = logging.INFO if reversion.ok else logging.ERROR
-            log.log(level, "reversion: %s", reversion.message)
+        try:
+            for reversion in orchestrator.tick():
+                level = logging.INFO if reversion.ok else logging.ERROR
+                log.log(level, "reversion: %s", reversion.message)
+        except Exception:
+            # Si este hilo muere, no se revierte nada nunca mas y nadie se
+            # entera. Se registra y se sigue: un watchdog que falla una vuelta
+            # sirve; uno muerto, no.
+            log.exception("fallo en la vuelta del watchdog")
         stop.wait(TICK_SECONDS)
 
 
@@ -124,9 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         log.info("parando")
     finally:
         stop.set()
-        # Un ultimo repaso: si algo estaba armado, se deshace antes de irse en
-        # vez de dejar un tunel a medias sin nadie que lo vigile.
-        for reversion in orchestrator.tick():
+        # Se deshace todo lo armado, haya vencido o no: al pararse el servicio
+        # no queda nadie vigilando, y un tunel completo sin vigilante es un
+        # equipo sin marcha atras.
+        for reversion in orchestrator.shutdown():
             log.info("reversion al parar: %s", reversion.message)
     return 0
 

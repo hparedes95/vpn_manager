@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +24,7 @@ from vpnmanager.core.models import (
 from vpnmanager.core.watchdog import NetworkSnapshot
 from vpnmanager.net.powershell import (
     MAX_OUTPUT_BYTES,
+    RESTORE_TIMEOUT_SECONDS,
     PowerShellRunner,
     Script,
 )
@@ -56,8 +58,12 @@ class StubRunner:
 
         self.result = ScriptResult(ok=ok, data={} if data is None else data)
         self.calls: list[tuple[Script, dict[str, str]]] = []
+        self.timeouts: list[float | None] = []
 
-    def run(self, script: Script, **parameters: str) -> Any:
+    def run(
+        self, script: Script, *, timeout_seconds: float | None = None, **parameters: str
+    ) -> Any:
+        self.timeouts.append(timeout_seconds)
         self.calls.append((script, parameters))
         return self.result
 
@@ -309,13 +315,41 @@ def test_a_snapshot_that_could_not_be_taken_is_not_usable() -> None:
     assert not snapshot.usable
 
 
-def test_restoring_sends_back_the_payload_untouched() -> None:
+def test_restoring_sends_the_payload_in_a_file() -> None:
+    """Por la linea de comandos el JSON llega roto: PowerShell reinterpreta las comillas."""
     runner = StubRunner(ok=True)
     snapshot = NetworkSnapshot(payload='{"ok":true,"routes":[]}')
 
     assert PowerShellNetworkController(runner).restore(snapshot) is True  # type: ignore[arg-type]
     assert runner.calls[0][0] is Script.RESTORE_NET_STATE
-    assert runner.calls[0][1] == {"State": '{"ok":true,"routes":[]}'}
+    assert "State" not in runner.calls[0][1]
+    assert runner.calls[0][1]["StatePath"].endswith(".json")
+
+
+def test_restoring_gets_its_own_longer_budget() -> None:
+    """Que el plazo de una lectura corte una restauracion a medias es lo peor posible."""
+    runner = StubRunner(ok=True)
+
+    PowerShellNetworkController(runner).restore(NetworkSnapshot(payload="{}"))  # type: ignore[arg-type]
+
+    assert runner.timeouts[0] == RESTORE_TIMEOUT_SECONDS
+
+
+def test_the_temporary_file_does_not_stay_behind() -> None:
+    runner = StubRunner(ok=True)
+
+    PowerShellNetworkController(runner).restore(NetworkSnapshot(payload="{}"))  # type: ignore[arg-type]
+
+    assert not Path(runner.calls[0][1]["StatePath"]).exists()
+
+
+def test_a_probe_without_networks_omits_the_argument() -> None:
+    """Un argumento vacio no sobrevive a `-File`: el parametro se queda sin valor."""
+    runner = StubRunner()
+
+    PowerShellProbe(runner).check(make_profile(target_networks=()))  # type: ignore[arg-type]
+
+    assert "TargetNetworks" not in runner.calls[0][1]
 
 
 def test_restoring_an_empty_snapshot_does_nothing_and_says_it_failed() -> None:

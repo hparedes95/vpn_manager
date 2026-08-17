@@ -31,6 +31,7 @@ autoriza; la segunda desarma.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -49,7 +50,7 @@ from vpnmanager.core.protocol import (
     Request,
     Response,
 )
-from vpnmanager.core.watchdog import NetworkSnapshot, Watchdog
+from vpnmanager.core.watchdog import NetworkSnapshot, Reversion, Watchdog
 
 
 class NetworkController(Protocol):
@@ -93,11 +94,22 @@ class Orchestrator:
         self._watchdog = Watchdog() if watchdog is None else watchdog
         self._arbiter = TunnelArbiter(self._catalog)
         self._sessions: dict[str, Session] = {}
+        # El servicio atiende el pipe en un hilo y vigila el watchdog en otro,
+        # y los dos tocan estas sesiones. Sin esto, un CONFIRM que llega
+        # mientras se recogen las ventanas vencidas revienta con "dictionary
+        # changed size during iteration", el hilo del watchdog muere, y desde
+        # ese momento no se revierte nada nunca mas sin mas rastro que una
+        # traza en el log.
+        self._lock = threading.RLock()
 
     # -- Entrada -----------------------------------------------------------
 
     def handle(self, request: Request) -> Response:
         """Atiende una peticion ya decodificada y validada por el protocolo."""
+        with self._lock:
+            return self._handle(request)
+
+    def _handle(self, request: Request) -> Response:
         if request.command is Command.LIST:
             return self._list()
 
@@ -129,11 +141,28 @@ class Orchestrator:
         lado del pipe, porque justo el problema es que puede que ya no haya
         nadie al otro lado.
         """
+        with self._lock:
+            return self._revert(self._watchdog.collect_expired())
+
+    def shutdown(self) -> tuple[Response, ...]:
+        """Deshace todo lo armado antes de irse, haya vencido o no.
+
+        Una ventana abierta solo protege mientras alguien la vigila. Al parar
+        el servicio no queda nadie, asi que dejar un tunel completo arriba es
+        dejarlo sin marcha atras hasta que alguien vaya hasta el equipo.
+        """
+        with self._lock:
+            return self._revert(
+                self._watchdog.revert_all("el servicio se esta parando: se deshace la conexion")
+            )
+
+    def _revert(self, reversions_to_do: tuple[Reversion, ...]) -> tuple[Response, ...]:
         reversions = []
-        for reversion in self._watchdog.collect_expired():
+        for reversion in reversions_to_do:
             profile = self._catalog.get(reversion.profile_id)
             if profile is not None:
                 self._force_disconnect(profile)
+                self._session(reversion.profile_id).pid = None
             restored = self._network.restore(reversion.snapshot)
             self._session(reversion.profile_id).state = ConnectionState.DISCONNECTED
             reversions.append(
@@ -188,7 +217,12 @@ class Orchestrator:
             return self._orphan(profile)
 
         for victim_id in plan.disconnect_first:
-            self._force_disconnect(self._catalog[victim_id])
+            if not self._force_disconnect(self._catalog[victim_id]):
+                # Sin desalojar no se conecta: quedarian dos tuneles completos.
+                return Response.failure(
+                    f"no se pudo desconectar '{self._catalog[victim_id].display_name}', "
+                    f"asi que no se conecta nada encima"
+                )
 
         # La foto se toma antes de tocar nada, y el watchdog se arma antes de
         # conectar: si la conexion deja el equipo incomunicado, la reversion ya
@@ -231,7 +265,6 @@ class Orchestrator:
         if connector is None:
             return self._orphan(profile)
 
-        self._watchdog.cancel(profile.id)
         if not connector.supports(Capability.DISCONNECT):
             # No se marca como desconectado lo que sigue conectado: el estado
             # tiene que seguir siendo el real, aunque sea incomodo.
@@ -249,6 +282,10 @@ class Orchestrator:
         session = self._session(profile.id)
         session.state = ConnectionState.DISCONNECTED if result.ok else result.state
         if result.ok:
+            # Solo ahora se desarma. Hacerlo antes dejaria sin marcha atras a
+            # un tunel que sigue arriba, que es justo el caso en el que hace
+            # falta: si ha cortado el RDP, ya no hay quien lo arregle.
+            self._watchdog.cancel(profile.id)
             session.pid = None
         return Response(ok=result.ok, message=result.message, state=session.state)
 
@@ -294,15 +331,27 @@ class Orchestrator:
         session.state = probed.state(previous=session.state)
         return session.state
 
-    def _force_disconnect(self, profile: Profile) -> None:
-        """Desconecta sin responder a nadie. Para desalojos y reversiones."""
+    def _force_disconnect(self, profile: Profile) -> bool:
+        """Desconecta sin responder a nadie. Dice si de verdad lo consiguio.
+
+        Devolver siempre exito seria peor que no intentarlo: el desalojo
+        seguiria adelante y quedarian dos tuneles completos a la vez, con el
+        servicio informando de que uno esta desconectado.
+        """
         connector = self._registry.for_profile(profile)
-        if connector is not None and connector.supports(Capability.DISCONNECT):
-            connector.disconnect(profile)
+        if connector is None or not connector.supports(Capability.DISCONNECT):
+            return False
+
+        result = connector.disconnect(profile)
+        if not result.ok:
+            self._session(profile.id).state = result.state
+            return False
+
         self._watchdog.cancel(profile.id)
         session = self._session(profile.id)
         session.state = ConnectionState.DISCONNECTED
         session.pid = None
+        return True
 
     def _orphan(self, profile: Profile) -> Response:
         return Response(

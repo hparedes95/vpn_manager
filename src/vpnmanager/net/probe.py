@@ -26,10 +26,14 @@ class PowerShellProbe:
             # sondear, y decir que esta caido seria mentir.
             return ProbeResult(checked=False)
 
-        result = self._runner.run(
-            Script.TEST_TUNNEL,
-            ProbeIp=profile.probe_ip,
-            TargetNetworks=",".join(profile.target_networks),
+        # Un argumento vacio no sobrevive a `powershell.exe -File`: se pierde
+        # y el parametro siguiente se queda sin valor, asi que el script falla
+        # antes de empezar. Si no hay redes declaradas, no se manda.
+        networks = ",".join(profile.target_networks)
+        result = (
+            self._runner.run(Script.TEST_TUNNEL, ProbeIp=profile.probe_ip, TargetNetworks=networks)
+            if networks
+            else self._runner.run(Script.TEST_TUNNEL, ProbeIp=profile.probe_ip)
         )
         if not result.ok:
             # No se pudo mirar. Distinto de haber mirado y estar caido: si se

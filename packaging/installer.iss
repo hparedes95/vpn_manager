@@ -28,7 +28,10 @@ DisableProgramGroupPage=yes
 WizardStyle=modern
 
 [Files]
-Source: "..\dist\VpnManager\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+; Dos bundles independientes: cada .exe con su runtime. Se paga espacio a
+; cambio de que uno no pueda dejar al otro sin arrancar.
+Source: "..\dist\vpnmgr-svc\*"; DestDir: "{app}\svc"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\vpnmgr-ui\*"; DestDir: "{app}\ui"; Flags: recursesubdirs ignoreversion
 
 ; Catalogo de ejemplo. No pisa el que ya haya: si alguien ya ha configurado
 ; sus perfiles, una reinstalacion no se los puede llevar por delante.
@@ -42,8 +45,8 @@ Source: "..\docs\profiles.example.json"; DestDir: "{commonappdata}\VpnManager"; 
 Name: "{commonappdata}\VpnManager"; Permissions: admins-full system-full users-readexec
 
 [Icons]
-Name: "{group}\VPN Manager"; Filename: "{app}\vpnmgr-ui.exe"
-Name: "{userstartup}\VPN Manager"; Filename: "{app}\vpnmgr-ui.exe"; Tasks: autostart
+Name: "{group}\VPN Manager"; Filename: "{app}\ui\vpnmgr-ui.exe"
+Name: "{userstartup}\VPN Manager"; Filename: "{app}\ui\vpnmgr-ui.exe"; Tasks: autostart
 
 [Tasks]
 Name: autostart; Description: "Arrancar la bandeja al iniciar sesion"; GroupDescription: "Inicio:"
@@ -58,14 +61,14 @@ Name: allowunsigned; Description: \
 ; firma. Es lo unico que permite probar sin certificado, y por eso va como una
 ; casilla aparte, desmarcada y con el aviso escrito.
 Filename: "{sys}\sc.exe"; \
-    Parameters: "create VpnManagerSvc binPath= ""\""{app}\vpnmgr-svc.exe\"" --allow-unsigned-catalog"" start= auto DisplayName= ""VPN Manager"""; \
+    Parameters: "create VpnManagerSvc binPath= ""\""{app}\svc\vpnmgr-svc.exe\"" --allow-unsigned-catalog"" start= auto DisplayName= ""VPN Manager"""; \
     Flags: runhidden; Tasks: installservice and allowunsigned
 Filename: "{sys}\sc.exe"; \
-    Parameters: "create VpnManagerSvc binPath= ""\""{app}\vpnmgr-svc.exe\"""" start= auto DisplayName= ""VPN Manager"""; \
+    Parameters: "create VpnManagerSvc binPath= ""\""{app}\svc\vpnmgr-svc.exe\"""" start= auto DisplayName= ""VPN Manager"""; \
     Flags: runhidden; Tasks: installservice and not allowunsigned
 Filename: "{sys}\sc.exe"; Parameters: "start VpnManagerSvc"; Flags: runhidden; Tasks: installservice
 
-Filename: "{app}\vpnmgr-ui.exe"; Description: "Abrir la bandeja"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\ui\vpnmgr-ui.exe"; Description: "Abrir la bandeja"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop VpnManagerSvc"; Flags: runhidden; RunOnceId: "StopSvc"

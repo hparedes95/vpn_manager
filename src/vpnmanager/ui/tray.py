@@ -14,17 +14,29 @@ pulsar y no despues.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
 import sys
+import traceback
+from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from vpnmanager.connectors.process import WindowsProcessLauncher
 from vpnmanager.core.models import Capability, ConnectionState
-from vpnmanager.core.protocol import ProfileSummary, Response
+from vpnmanager.core.protocol import ProfileSummary, ProtocolError, Response
 from vpnmanager.ui.client import ServiceClient, action_label, needs_asking_first
 from vpnmanager.ui.transport import PipeTransport, PipeUnavailable
+
+log = logging.getLogger("vpnmgr.ui")
+
+# La bandeja se empaqueta sin consola, asi que un fallo al arrancar no deja
+# ni un mensaje: el icono simplemente no aparece. El log es lo unico que
+# permite saber por que, y por eso se escribe desde la primera linea.
+LOG_PATH = Path(os.environ.get("LOCALAPPDATA", ".")) / "VpnManager" / "vpnmgr-ui.log"
 
 # Cada cuanto se refresca el menu y se confirman las conexiones en marcha. La
 # ventana del watchdog son 90 s, asi que 10 deja margen de sobra para varios
@@ -47,7 +59,7 @@ class TrayApp:
 
     def __init__(self, client: ServiceClient) -> None:
         self._client = client
-        self._icon = QSystemTrayIcon(QIcon.fromTheme("network-vpn"))
+        self._icon = QSystemTrayIcon(build_icon())
         self._menu = QMenu()
         self._icon.setContextMenu(self._menu)
         self._watching: set[str] = set()
@@ -68,17 +80,27 @@ class TrayApp:
         Que esto deje de ejecutarse es justo lo que el servicio interpreta
         como "esta interfaz ya no esta": si el tunel se llevo por delante la
         sesion, nadie confirma y la conexion se deshace sola.
+
+        Nada de aqui puede escaparse: una excepcion sin capturar dentro de un
+        slot de Qt se lleva la aplicacion por delante, y con ella el icono, la
+        confirmacion y por tanto todos los tuneles armados.
         """
         for profile_id in sorted(self._watching):
             try:
                 self._client.confirm_if_connected(profile_id)
-            except PipeUnavailable:
-                return
+            except (PipeUnavailable, ProtocolError):
+                # Se sigue con los demas y con el refresco: un fallo puntual
+                # no puede dejar el menu congelado hasta el siguiente tick.
+                log.warning("no se pudo confirmar %s", profile_id, exc_info=True)
 
         try:
             profiles = self._client.list_profiles()
-        except PipeUnavailable as error:
+        except (PipeUnavailable, ProtocolError) as error:
             self._icon.setToolTip(f"VPN Manager: {error}")
+            return
+        except Exception:
+            log.exception("fallo inesperado refrescando la lista de perfiles")
+            self._icon.setToolTip("VPN Manager: error interno, mira el log")
             return
 
         self._icon.setToolTip("VPN Manager")
@@ -104,8 +126,12 @@ class TrayApp:
     def _act_on(self, summary: ProfileSummary) -> None:
         try:
             self._run_action(summary)
-        except PipeUnavailable as error:
+        except (PipeUnavailable, ProtocolError) as error:
             self._warn("Sin conexion con el servicio", str(error))
+        except Exception:
+            # Un slot de Qt que deja escapar una excepcion mata la aplicacion.
+            log.exception("fallo inesperado atendiendo una accion")
+            self._warn("Error interno", f"Algo ha fallado. El detalle esta en:\n{LOG_PATH}")
 
     def _run_action(self, summary: ProfileSummary) -> None:
         if summary.state is ConnectionState.CONNECTED:
@@ -117,10 +143,11 @@ class TrayApp:
         if needs_asking_first(summary) and not self._ask_about_losing_the_network(summary):
             return
 
-        if Capability.CONNECT in summary.capabilities:
-            response = self._client.connect(summary.id, user_confirmed=summary.needs_confirmation)
-        else:
-            response = self._client.launch(summary.id)
+        # Siempre CONNECT, nunca LAUNCH. Es el servicio quien decide si un
+        # conector sabe conectar o solo abrir el cliente, y solo el camino de
+        # CONNECT pasa por el arbitro, saca la foto de red y arma el watchdog.
+        # Mandar LAUNCH desde aqui montaria un tunel completo sin marcha atras.
+        response = self._client.connect(summary.id, user_confirmed=summary.needs_confirmation)
 
         if response.ok:
             # A partir de aqui hay que confirmar hasta que el tunel este
@@ -167,8 +194,62 @@ class TrayApp:
         QMessageBox.warning(None, title, detail)
 
 
+def build_icon() -> QIcon:
+    """Un icono dibujado aqui mismo.
+
+    `QIcon.fromTheme` no resuelve nada en Windows y devuelve un icono vacio:
+    la bandeja acepta el icono vacio sin quejarse y no se ve nada, que se
+    parece mucho a "no ha arrancado". Dibujarlo evita depender de recursos
+    externos y de que el empaquetado los copie.
+    """
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor("#2d7dd2"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(QRect(6, 6, 52, 52))
+    painter.setPen(QColor("white"))
+    font = painter.font()
+    font.setPointSize(26)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "V")
+    painter.end()
+    return QIcon(pixmap)
+
+
+def setup_logging() -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8")],
+    )
+
+
 def main() -> int:
     """Punto de entrada de `vpnmgr-ui`."""
+    # Sin log se puede seguir; sin bandeja, no. No se aborta por esto.
+    with contextlib.suppress(OSError):
+        setup_logging()
+
+    try:
+        return _run()
+    except Exception:
+        # Empaquetada sin consola, una excepcion aqui no deja rastro alguno.
+        detail = traceback.format_exc()
+        log.critical("la bandeja no pudo arrancar:\n%s", detail)
+        with contextlib.suppress(Exception):
+            QMessageBox.critical(
+                None,
+                "VPN Manager no pudo arrancar",
+                f"{detail}\n\nEl detalle esta en:\n{LOG_PATH}",
+            )
+        return 1
+
+
+def _run() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
@@ -180,6 +261,7 @@ def main() -> int:
         )
         return 1
 
+    log.info("arrancando la bandeja")
     client = ServiceClient(PipeTransport(), WindowsProcessLauncher())
     TrayApp(client).start()
     return app.exec()

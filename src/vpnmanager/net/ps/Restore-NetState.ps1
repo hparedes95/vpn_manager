@@ -13,14 +13,18 @@
     2. Se informa de cada parte por separado. "No se pudo restaurar" sin decir
        que parte no se pudo no sirve de nada a las tres de la manana.
 
-    El parametro -State es el JSON que devolvio Get-NetState.ps1.
+    La foto llega en un fichero y no como argumento: pasar el JSON por la
+    linea de comandos lo destroza. PowerShell reinterpreta las comillas de los
+    argumentos de -File con sus propias reglas, asi que lo que llegaba ya no
+    era JSON valido; y una tabla de rutas grande se acerca al limite de
+    longitud de la linea de comandos.
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string] $State
+    [string] $StatePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,10 +35,10 @@ function Write-Result {
 }
 
 try {
-    $snapshot = $State | ConvertFrom-Json
+    $snapshot = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 catch {
-    Write-Result @{ ok = $false; error = 'la foto de red guardada no es JSON valido' }
+    Write-Result @{ ok = $false; error = 'no se pudo leer la foto de red guardada' }
     exit 1
 }
 
@@ -49,11 +53,18 @@ $restoredDns = 0
 
 try {
     $wanted = @{}
+    $knownInterfaces = @{}
     foreach ($route in @($snapshot.routes)) {
         $wanted["$($route.interfaceIndex)|$($route.destination)|$($route.next_hop)"] = $true
+        $knownInterfaces[[int] $route.interfaceIndex] = $true
     }
 
+    # Solo se tocan los interfaces que ya existian cuando se saco la foto. Un
+    # adaptador que ha aparecido despues —wifi que asocia, DHCP que renueva,
+    # una dock que se enchufa— trae rutas legitimas que no estaban, y
+    # borrarlas dejaria el equipo peor de lo que lo dejo el tunel.
     foreach ($current in @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop)) {
+        if (-not $knownInterfaces.ContainsKey([int] $current.InterfaceIndex)) { continue }
         $key = "$([int] $current.InterfaceIndex)|$($current.DestinationPrefix)|$($current.NextHop)"
         if (-not $wanted.ContainsKey($key)) {
             try {

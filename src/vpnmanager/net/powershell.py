@@ -36,6 +36,11 @@ SCRIPT_DIR: Final = Path(__file__).resolve().parent / "ps"
 
 DEFAULT_TIMEOUT_SECONDS: Final = 30.0
 
+# Restaurar la red no es una lectura: hace una llamada al sistema por cada ruta
+# y por cada adaptador. Que el plazo corte a PowerShell a mitad deja la tabla
+# de rutas medio reconstruida, que es peor que no haber empezado.
+RESTORE_TIMEOUT_SECONDS: Final = 300.0
+
 # La salida de un script no deberia pasar de unos pocos kilobytes. El tope
 # esta para que una tabla de rutas absurda no se coma la memoria del servicio.
 MAX_OUTPUT_BYTES: Final = 1024 * 1024
@@ -79,13 +84,23 @@ class PowerShellRunner:
         self._timeout = timeout_seconds
         self._executable = executable
 
-    def run(self, script: Script, **parameters: str) -> ScriptResult:
+    def run(
+        self,
+        script: Script,
+        *,
+        timeout_seconds: float | None = None,
+        **parameters: str,
+    ) -> ScriptResult:
         """Ejecuta un script con parametros con nombre.
 
         Los valores llegan del catalogo firmado. Van como elementos de la
         lista de argumentos, asi que un espacio o una comilla son un caracter
         mas y no cambian la orden.
+
+        `timeout_seconds` permite darle mas plazo a lo que lo necesita, como
+        la restauracion de la red.
         """
+        timeout = self._timeout if timeout_seconds is None else timeout_seconds
         if not script.path.is_file():
             return ScriptResult(
                 ok=False, error=f"falta el script '{script.value}' en la instalacion"
@@ -96,13 +111,13 @@ class PowerShellRunner:
                 self._argv(script, parameters),
                 shell=False,
                 capture_output=True,
-                timeout=self._timeout,
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
             return ScriptResult(
                 ok=False,
-                error=f"'{script.value}' no respondio en {self._timeout:g} s",
+                error=f"'{script.value}' no respondio en {timeout:g} s",
             )
         except OSError as error:
             return ScriptResult(ok=False, error=f"no se pudo ejecutar PowerShell: {error.strerror}")

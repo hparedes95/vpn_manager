@@ -59,6 +59,10 @@ class ServiceClient:
         self._transport = transport
         self._launcher = launcher
         self._stream = MessageStream(MAX_RESPONSE_BYTES)
+        # Ojo: si la conexion se cae, el transporte reabre por su cuenta pero
+        # en el buffer pueden quedar bytes de una respuesta a medias. Sumados
+        # a la siguiente, todas las respuestas quedan corridas para siempre.
+        # Por eso el flujo se tira y se rehace en cada reconexion.
         self.last_launch: LaunchOutcome | None = None
 
     # -- Lo que la bandeja necesita ---------------------------------------
@@ -101,7 +105,16 @@ class ServiceClient:
     # -- Interno -----------------------------------------------------------
 
     def _ask(self, request: Request) -> Response:
-        """Manda una peticion y devuelve la respuesta, ya con su orden atendida."""
+        """Manda una peticion y devuelve la respuesta, ya con su orden atendida.
+
+        El flujo se rehace en cada peticion. El servicio cuelga la conexion en
+        cuanto algo no le cuadra, y el transporte reabre por su cuenta: si se
+        conservara el flujo, los bytes de la respuesta a medias se sumarian a
+        la siguiente y **todas** las respuestas quedarian corridas a partir de
+        ahi. Y una sola pasada del limite lo dejaria roto para siempre, con la
+        bandeja inservible hasta reiniciarla.
+        """
+        self._stream = MessageStream(MAX_RESPONSE_BYTES)
         self._transport.send(request.encode())
         response = self._read()
         if response.launch is not None:

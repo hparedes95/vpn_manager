@@ -17,26 +17,29 @@ se ha dejado lo mas corto posible.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Final
+import time
+from typing import Final
 
 from vpnmanager.service.dispatcher import ConnectionHandler, DeferredUserSession
 from vpnmanager.service.orchestrator import Orchestrator
-
-if TYPE_CHECKING:  # pragma: no cover - solo para el tipado
-    pass
 
 log = logging.getLogger(__name__)
 
 PIPE_NAME: Final = r"\\.\pipe\vpnmgr"
 BUFFER_SIZE: Final = 64 * 1024
+RETRY_SECONDS: Final = 2.0
 
 # Quien puede hablar con el servicio. Se sustituye por el grupo de AD cuando
 # exista: hasta entonces, solo administradores del equipo.
 DEFAULT_ALLOWED_GROUPS: Final = ("BUILTIN\\Administrators",)
 
 
-def build_security_descriptor(allowed_groups: tuple[str, ...]):  # type: ignore[no-untyped-def]
-    """Descriptor con acceso solo para SYSTEM y los grupos indicados.
+def build_security_attributes(allowed_groups: tuple[str, ...]):  # type: ignore[no-untyped-def]
+    """SECURITY_ATTRIBUTES con acceso solo para SYSTEM y los grupos indicados.
+
+    `CreateNamedPipe` espera un SECURITY_ATTRIBUTES, no un
+    SECURITY_DESCRIPTOR: pasarle el segundo levanta un TypeError antes de
+    crear nada, y el servidor no llega a escuchar jamas.
 
     Se construye a mano y no se deja el descriptor por defecto: el de por
     defecto de un named pipe deja conectarse a cualquiera que haya iniciado
@@ -45,7 +48,7 @@ def build_security_descriptor(allowed_groups: tuple[str, ...]):  # type: ignore[
     import ntsecuritycon
     import win32security
 
-    descriptor = win32security.SECURITY_DESCRIPTOR()
+    attributes = win32security.SECURITY_ATTRIBUTES()
     acl = win32security.ACL()
 
     system = win32security.ConvertStringSidToSid("S-1-5-18")
@@ -60,8 +63,8 @@ def build_security_descriptor(allowed_groups: tuple[str, ...]):  # type: ignore[
         )
 
     # Sin herencia y con una DACL explicita: nadie mas entra.
-    descriptor.SetSecurityDescriptorDacl(1, acl, 0)
-    return descriptor
+    attributes.SetSecurityDescriptorDacl(1, acl, 0)
+    return attributes
 
 
 class PipeServer:
@@ -97,7 +100,13 @@ class PipeServer:
                 # Una conexion que revienta no puede llevarse el servicio por
                 # delante: si el servicio muere, nadie deshace un tunel que
                 # haya quedado a medias.
+                #
+                # Con espera, y no reintentando a ciegas: si lo que falla es
+                # crear el pipe —una ACL mal construida, un nombre ocupado— el
+                # fallo se repite en cada vuelta, y sin pausa eso es un bucle
+                # que llena el disco de log y no deja ver nada mas.
                 log.exception("fallo atendiendo una conexion del pipe")
+                time.sleep(RETRY_SECONDS)
 
     def _serve_one(self) -> None:
         import pywintypes
@@ -112,7 +121,7 @@ class PipeServer:
             BUFFER_SIZE,
             BUFFER_SIZE,
             0,
-            build_security_descriptor(self._allowed_groups),
+            build_security_attributes(self._allowed_groups),
         )
         try:
             win32pipe.ConnectNamedPipe(handle, None)

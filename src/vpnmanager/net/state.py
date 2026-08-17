@@ -13,10 +13,13 @@ de la red en vez de la red que habia.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import tempfile
+from pathlib import Path
 
 from vpnmanager.core.watchdog import NetworkSnapshot
-from vpnmanager.net.powershell import PowerShellRunner, Script
+from vpnmanager.net.powershell import RESTORE_TIMEOUT_SECONDS, PowerShellRunner, Script
 
 
 class PowerShellNetworkController:
@@ -50,7 +53,27 @@ class PowerShellNetworkController:
             # devolveria un exito que no es tal.
             return False
 
-        return self._runner.run(Script.RESTORE_NET_STATE, State=snapshot.payload).ok
+        # La foto va por fichero y no como argumento: PowerShell reinterpreta
+        # las comillas de los argumentos de -File, asi que el JSON llegaba
+        # roto. Ademas una tabla de rutas grande se acerca al limite de
+        # longitud de la linea de comandos.
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - se cierra abajo
+            mode="w", suffix=".json", encoding="utf-8", delete=False
+        )
+        try:
+            with handle:
+                handle.write(snapshot.payload)
+            # Con su propio plazo: restaurar hace una llamada al sistema por
+            # ruta y por adaptador, y que el plazo de una lectura corte una
+            # restauracion a medias es el peor resultado posible.
+            return self._runner.run(
+                Script.RESTORE_NET_STATE,
+                timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+                StatePath=handle.name,
+            ).ok
+        finally:
+            with contextlib.suppress(OSError):
+                Path(handle.name).unlink()
 
 
 def _route_summary(data: dict[str, object]) -> tuple[str, ...]:
