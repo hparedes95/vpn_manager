@@ -124,6 +124,7 @@ class PipeServer:
         self._pipe_name = pipe_name
         self._allowed_groups = allowed_groups
         self._stop = False
+        self._announced = False
 
     def stop(self) -> None:
         self._stop = True
@@ -159,6 +160,7 @@ class PipeServer:
             0,
             build_security_attributes(self._allowed_groups),
         )
+        self._announce_once()
         try:
             win32pipe.ConnectNamedPipe(handle, None)
             self._converse(handle)
@@ -166,6 +168,30 @@ class PipeServer:
             log.debug("la interfaz se desconecto del pipe")
         finally:
             win32file.CloseHandle(handle)
+
+    def _announce_once(self) -> None:
+        """Dice que esta escuchando, una sola vez y cuando ya es verdad.
+
+        Va aqui y no en quien monta el servidor por dos razones. La primera es
+        que asi no se puede olvidar: el arranque como servicio de Windows no
+        escribia esta linea —solo la escribia el arranque en consola— y el
+        resultado era un servicio que el Administrador de servicios daba por
+        `RUNNING` mientras su log se cortaba en la carga del catalogo, sin
+        forma de distinguir «escuchando» de «muerto al crear el pipe».
+
+        La segunda es que antes se escribia *antes* de crear el pipe, asi que
+        mentia precisamente en el caso en que hacia falta: si `CreateNamedPipe`
+        fallaba, el log decia «escuchando» y a continuacion soltaba una traza
+        cada dos segundos. Ahora solo se escribe cuando el pipe existe.
+        """
+        if self._announced:
+            return
+        self._announced = True
+        log.info(
+            "escuchando en %s; acceso permitido a: %s",
+            self._pipe_name,
+            ", ".join(self._allowed_groups),
+        )
 
     def _converse(self, handle: object) -> None:
         """Lee, se lo da al manejador, escribe. Nada mas."""

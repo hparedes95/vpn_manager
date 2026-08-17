@@ -26,9 +26,15 @@ sc.exe query VpnManagerSvc
 Start-Service VpnManagerSvc
 Get-Service VpnManagerSvc
 
-# 3. ¿Qué dice de sí mismo?
+# 3. ¿Está escuchando de verdad? — esto es lo que hay que mirar, no el log
+[System.IO.Directory]::GetFiles("\\.\pipe\") -match "vpnmgr"
+#    Tiene que salir \\.\pipe\vpnmgr. Si no sale, no escucha, diga lo que diga
+#    `Get-Service`: el Administrador de servicios da por RUNNING un proceso que
+#    se registró, aunque después se le haya caído todo por dentro.
+
 Get-Content C:\ProgramData\VpnManager\vpnmgr-svc.log -Tail 30
-#    Buscas: "escuchando en el pipe". Si se repite cada 2 s, está reiniciándose.
+#    Buscas: "escuchando en \\.\pipe\vpnmgr". Si se repite cada 2 s, algo falla
+#    en cada vuelta; si hay una traza, ahí está el motivo.
 
 # 4. ¿La interfaz habla con él?
 Start-Process "C:\Program Files\VpnManager\ui\vpnmgr-ui.exe"
@@ -36,16 +42,29 @@ Get-Content "$env:LOCALAPPDATA\VpnManager\vpnmgr-ui.log" -Tail 30
 #    Buscas: la ventana con los 4 perfiles del ejemplo.
 
 # 5. ¿La red se puede restaurar? — ANTES de tocar ningún túnel
-cd "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
-$f = "$env:TEMP\estado.json"
-& powershell -ExecutionPolicy Bypass -File .\Get-NetState.ps1 | Set-Content $f -Encoding UTF8
+#    Con la ruta completa y sin `cd`: si el `cd` se pierde, `-File .\algo.ps1`
+#    falla diciendo que el fichero no existe, que parece un fallo de la
+#    instalación y no lo es.
+$ps = "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
+$f  = "$env:TEMP\estado.json"
+
+& powershell -ExecutionPolicy Bypass -File "$ps\Get-NetState.ps1" | Set-Content $f -Encoding UTF8
 route add 10.99.0.0 mask 255.255.0.0 192.168.0.9
-& powershell -ExecutionPolicy Bypass -File .\Restore-NetState.ps1 -StatePath $f
+& powershell -ExecutionPolicy Bypass -File "$ps\Restore-NetState.ps1" -StatePath $f
 Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.NextHop -ne '0.0.0.0' }
 
 # 6. ¿La sonda distingue conectado de caído?
-& powershell -ExecutionPolicy Bypass -File .\Test-TunnelState.ps1 `
+& powershell -ExecutionPolicy Bypass -File "$ps\Test-TunnelState.ps1" `
     -ProbeIp 192.168.0.9 -TargetNetworks 192.168.0.0/24
+& powershell -ExecutionPolicy Bypass -File "$ps\Test-TunnelState.ps1" `
+    -ProbeIp 10.255.255.254 -TargetNetworks 192.168.0.0/24
+```
+
+Si el paso 5 deja la ruta de prueba puesta porque algo falló, quítala a mano
+antes de seguir:
+
+```powershell
+route delete 10.99.0.0
 ```
 
 Si el servicio no arranca (paso 2), lánzalo en consola como administrador para
@@ -72,10 +91,19 @@ El instalador **no está firmado**: SmartScreen avisará. Es esperado.
 
 | | Qué | Cómo se ve que está bien |
 |---|---|---|
-| ✅ | En consola como administrador | `escuchando en el pipe` sin trazas repitiéndose |
-| ❌ | **Como servicio de Windows** | Arranca sin el error 1053 |
-| ❌ | Log en fichero | `C:\ProgramData\VpnManager\vpnmgr-svc.log` con lo mismo que la consola |
-| ❌ | Parar el servicio con un túnel conectado | En el log: `reversion al parar` |
+| ✅ | En consola como administrador | `escuchando en \\.\pipe\vpnmgr` sin trazas repitiéndose |
+| ✅ | **Como servicio de Windows** | `Get-Service` dice `Running`, sin el error 1053 |
+| ⚠️ | El servicio llega a escuchar | El pipe existe **y** el log lo dice |
+| ✅ | Log en fichero | `C:\ProgramData\VpnManager\vpnmgr-svc.log` con lo mismo que la consola |
+| ❌ | Parar el servicio con un túnel conectado | En el log: `reversion al parar` y `servicio parado` |
+
+**`Running` no significa escuchando.** El Administrador de servicios da por
+arrancado a un proceso que se registró a tiempo; lo que pase después dentro del
+proceso no lo mira nadie. La comprobación buena es que exista el pipe:
+
+```powershell
+[System.IO.Directory]::GetFiles("\\.\pipe\") -match "vpnmgr"
+```
 
 En consola:
 

@@ -152,7 +152,6 @@ def run_console(argv: list[str] | None = None) -> int:
 
     groups = tuple(args.allowed_group) if args.allowed_group else DEFAULT_ALLOWED_GROUPS
     server = PipeServer(orchestrator, user_session, allowed_groups=groups)
-    log.info("escuchando en el pipe; acceso permitido a: %s", ", ".join(groups))
 
     try:
         server.serve_forever()

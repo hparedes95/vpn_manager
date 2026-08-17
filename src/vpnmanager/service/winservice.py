@@ -80,25 +80,36 @@ try:  # pragma: no cover - sin pywin32 no hay servicio que definir
             setup_logging()
             log.info("arrancando como servicio de Windows")
 
-            verifier = verifier_for(allow_unsigned=allow_unsigned_from_registry())
-            self._orchestrator, user_session = build_orchestrator(verifier)
-            stop = threading.Event()
-            threading.Thread(
-                target=run_watchdog_loop,
-                args=(self._orchestrator, stop),
-                name="watchdog",
-                daemon=True,
-            ).start()
+            # Todo el arranque va dentro del try. Aqui no hay consola ni nadie
+            # mirando: una excepcion al montar el orquestador se la queda
+            # pywin32, el Administrador de servicios dice lo suyo, y el fichero
+            # de log —que es lo unico que se puede leer despues— se corta a
+            # media frase sin decir por que.
+            try:
+                verifier = verifier_for(allow_unsigned=allow_unsigned_from_registry())
+                self._orchestrator, user_session = build_orchestrator(verifier)
+                stop = threading.Event()
+                threading.Thread(
+                    target=run_watchdog_loop,
+                    args=(self._orchestrator, stop),
+                    name="watchdog",
+                    daemon=True,
+                ).start()
 
-            server = PipeServer(self._orchestrator, user_session)
-            self._server = server
-            orchestrator = self._orchestrator
+                server = PipeServer(self._orchestrator, user_session)
+                self._server = server
+                orchestrator = self._orchestrator
+            except Exception:
+                log.exception("no se ha podido arrancar el servicio")
+                raise
+
             try:
                 server.serve_forever()
             finally:
                 stop.set()
                 for reversion in orchestrator.shutdown():
                     log.info("reversion al parar: %s", reversion.message)
+                log.info("servicio parado")
 
 except ImportError:  # pragma: no cover - fuera de Windows
     VpnManagerService = None  # type: ignore[assignment,misc]
