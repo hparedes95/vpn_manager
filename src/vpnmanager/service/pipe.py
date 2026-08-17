@@ -37,11 +37,21 @@ RETRY_SECONDS: Final = 2.0
 # idiomas y en todas las instalaciones, asi que es lo unico que se puede
 # escribir en el codigo sin dar por hecho el idioma de la maquina.
 #
-# S-1-5-32-544 = Administradores del equipo.
-ADMINISTRATORS_SID: Final = "S-1-5-32-544"
-LOCAL_SYSTEM_SID: Final = "S-1-5-18"
+ADMINISTRATORS_SID: Final = "S-1-5-32-544"  # Administradores del equipo
+LOCAL_SYSTEM_SID: Final = "S-1-5-18"  # SYSTEM
+INTERACTIVE_SID: Final = "S-1-5-4"  # quien ha iniciado sesion en este equipo
 
-DEFAULT_ALLOWED_GROUPS: Final = (ADMINISTRATORS_SID,)
+# Por defecto, INTERACTIVE. Y no Administradores, aunque parezca mas estricto:
+# UAC marca ese grupo como *deny-only* en el token de un proceso no elevado,
+# asi que la bandeja —que corre sin privilegios a proposito— no puede usar esa
+# pertenencia para abrir el pipe. El resultado seria un servicio escuchando al
+# que nadie puede hablar.
+#
+# INTERACTIVE es mas amplio de lo que queremos: significa cualquiera que haya
+# iniciado sesion en la maquina. En un puesto de un solo usuario es razonable,
+# y en produccion lo sustituye el grupo de AD, que si sobrevive al filtrado de
+# UAC porque los grupos de dominio no son de los que UAC recorta.
+DEFAULT_ALLOWED_GROUPS: Final = (INTERACTIVE_SID,)
 
 
 def build_security_attributes(allowed_groups: tuple[str, ...]):  # type: ignore[no-untyped-def]
