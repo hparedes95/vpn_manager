@@ -56,7 +56,17 @@ Name: allowunsigned; Description: \
     "PRUEBAS: aceptar el catalogo sin firma. NO usar en un equipo de la empresa."; \
     GroupDescription: "Servicio:"; Flags: unchecked
 
+[InstallDelete]
+; Restos de la instalacion anterior, que repartia los .exe de otra forma.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\*.exe"
+
 [Run]
+; Un servicio que ya existe hace que `sc create` falle, y sin esto quedaria
+; registrado el binario viejo con sus argumentos viejos. Se para y se borra
+; antes de crearlo: los dos fallan sin ruido si no habia nada que borrar.
+Filename: "{sys}\sc.exe"; Parameters: "stop VpnManagerSvc"; Flags: runhidden; Tasks: installservice
+Filename: "{sys}\sc.exe"; Parameters: "delete VpnManagerSvc"; Flags: runhidden; Tasks: installservice
 ; Con --allow-unsigned-catalog el catalogo deja de estar protegido por una
 ; firma. Es lo unico que permite probar sin certificado, y por eso va como una
 ; casilla aparte, desmarcada y con el aviso escrito.
