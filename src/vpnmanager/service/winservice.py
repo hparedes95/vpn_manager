@@ -30,13 +30,19 @@ def is_service_start(argv: list[str]) -> bool:
 
 
 def run_as_service() -> None:
-    """Entrega el proceso al Administrador de servicios."""
+    """Entrega el proceso al Administrador de servicios.
+
+    `StartServiceCtrlDispatcher` y no `HandleCommandLine`: el segundo sirve
+    para gestionar el servicio desde una consola —instalarlo, pararlo— y sin
+    argumentos imprime la ayuda y termina con codigo 0. Arrancado por el
+    Administrador de servicios eso se ve como un servicio que se para solo
+    nada mas empezar, sin ningun error que mirar.
+    """
     import servicemanager
-    import win32serviceutil
 
     servicemanager.Initialize()
     servicemanager.PrepareToHostSingle(VpnManagerService)
-    win32serviceutil.HandleCommandLine(VpnManagerService)
+    servicemanager.StartServiceCtrlDispatcher()
 
 
 try:  # pragma: no cover - sin pywin32 no hay servicio que definir
