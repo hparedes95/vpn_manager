@@ -11,6 +11,52 @@ la red no cueste un viaje.
 
 ---
 
+## 0. Orden para descartar rápido
+
+Si solo vas a hacer una pasada, hazla en este orden: cada paso descarta una
+capa entera, y parar en el primero que falle ahorra el resto.
+
+```powershell
+# 1. ¿Se instaló donde toca?
+Get-ChildItem "C:\Program Files\VpnManager" -Recurse -Filter *.exe |
+    Select-Object FullName
+
+# 2. ¿El servicio existe y arranca? (PowerShell: sc.exe, NO sc)
+sc.exe query VpnManagerSvc
+Start-Service VpnManagerSvc
+Get-Service VpnManagerSvc
+
+# 3. ¿Qué dice de sí mismo?
+Get-Content C:\ProgramData\VpnManager\vpnmgr-svc.log -Tail 30
+#    Buscas: "escuchando en el pipe". Si se repite cada 2 s, está reiniciándose.
+
+# 4. ¿La interfaz habla con él?
+Start-Process "C:\Program Files\VpnManager\ui\vpnmgr-ui.exe"
+Get-Content "$env:LOCALAPPDATA\VpnManager\vpnmgr-ui.log" -Tail 30
+#    Buscas: la ventana con los 4 perfiles del ejemplo.
+
+# 5. ¿La red se puede restaurar? — ANTES de tocar ningún túnel
+cd "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
+$f = "$env:TEMP\estado.json"
+& powershell -ExecutionPolicy Bypass -File .\Get-NetState.ps1 | Set-Content $f -Encoding UTF8
+route add 10.99.0.0 mask 255.255.0.0 192.168.0.9
+& powershell -ExecutionPolicy Bypass -File .\Restore-NetState.ps1 -StatePath $f
+Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.NextHop -ne '0.0.0.0' }
+
+# 6. ¿La sonda distingue conectado de caído?
+& powershell -ExecutionPolicy Bypass -File .\Test-TunnelState.ps1 `
+    -ProbeIp 192.168.0.9 -TargetNetworks 192.168.0.0/24
+```
+
+Si el servicio no arranca (paso 2), lánzalo en consola como administrador para
+ver el error sin filtros:
+
+```powershell
+& "C:\Program Files\VpnManager\svc\vpnmgr-svc.exe" --allow-unsigned-catalog
+```
+
+Los detalles de cada paso, y qué significa que falle, están abajo.
+
 ## 1. Instalación
 
 | | Qué | Cómo se ve que está bien |
@@ -119,6 +165,30 @@ Prueba también con una IP que no responda: `connected` a `false` y
 separa un aviso de una caída.
 
 ## 5. El catálogo
+
+### 5.1 Desde la interfaz ❌
+
+El botón **«Gestionar VPN…»** de la ventana vuelve a lanzar la aplicación
+pidiendo elevación: el editor corre en **otro proceso, como administrador**. La
+ventana normal no escribe el catálogo, y eso es a propósito — ese fichero decide
+qué binario ejecuta un servicio como SYSTEM.
+
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ❌ | Pulsar «Gestionar VPN…» | Sale el aviso de UAC; al aceptar, se abre el editor |
+| ❌ | Cancelar el UAC | La ventana normal sigue funcionando, sin editor |
+| ❌ | «Añadir» con datos válidos | El perfil aparece en la lista del editor |
+| ❌ | Guardar un perfil con una ruta relativa | Lo rechaza y enseña **todos** los fallos juntos, no solo el primero |
+| ❌ | El desplegable de clientes | Solo salen conectores que existen; no se puede teclear otro |
+| ❌ | Guardar | Ofrece reiniciar el servicio |
+| ❌ | Aceptar el reinicio | Al volver a la ventana, el perfil nuevo está en la tabla |
+| ❌ | Mirar `profiles.json` después | JSON legible, sin los campos que van por defecto |
+
+Que el editor pida UAC no le da permisos nuevos a nadie: quien puede pasar por
+UAC ya podía abrir ese fichero con el Bloc de notas. Lo que evita es que el
+proceso sin privilegios lo toque.
+
+### 5.2 A mano ⚠️
 
 | | Qué | Cómo se ve que está bien |
 |---|---|---|
