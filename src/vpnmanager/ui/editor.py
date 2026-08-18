@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vpnmanager.connectors.providers import PROVIDERS
+from vpnmanager.connectors.providers import PROVIDERS, PROVIDERS_BY_NAME, Provider, detect
 from vpnmanager.core.models import (
     DisconnectStrategy,
     LaunchContext,
@@ -46,6 +48,7 @@ from vpnmanager.core.models import (
     LaunchSpec,
     Profile,
     TunnelType,
+    suggest_profile_id,
 )
 from vpnmanager.security.catalog import dump_catalog, load_catalog
 
@@ -111,101 +114,222 @@ def relaunch_elevated() -> bool:
         return False
 
 
+WHERE_THE_CONNECTION_LIVES = (
+    "La direccion del gateway, el puerto, el usuario y el certificado se "
+    "configuran <b>en el cliente oficial</b>, no aqui. Un FortiClient con dos "
+    "gateways sigue siendo una conexion suya.\n\n"
+    "Aqui solo se dice <b>cual</b> abrir y <b>como comprobar</b> que el tunel "
+    "esta levantado."
+)
+
+WHAT_THE_WITNESS_IP_IS = (
+    "Una IP de <b>dentro</b> de la red remota: la que solo responde si el tunel "
+    "esta en pie. No la del gateway — esa responde igual con la VPN caida, y el "
+    "perfil diria «conectado» sin estarlo.\n\n"
+    "Si todavia no la sabes, dejalo vacio: la VPN se abrira igual y su estado "
+    "dira «abierto — sin comprobar» hasta que la rellenes."
+)
+
+
 class ProfileDialog(QDialog):
-    """Los datos de una VPN. Valida antes de dejar guardar."""
+    """Los datos de una VPN. Valida antes de dejar guardar.
+
+    Lo justo arriba y lo demas escondido. De los trece campos que habia, hoy
+    solo cuatro necesitan que alguien piense: el resto se deduce del nombre,
+    se busca en el disco o es para cuando exista un conector verificado.
+    """
 
     def __init__(self, parent: QWidget | None, profile: Profile | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("VPN" if profile else "Nueva VPN")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
 
-        self._id = QLineEdit(profile.id if profile else "")
-        self._id.setPlaceholderText("wireguard-central")
+        # Al editar no se toca nada solo: lo que hay puesto lo puso alguien.
+        self._id_is_automatic = profile is None
+        self._breaks_is_automatic = profile is None
+        self._target_is_automatic = profile is None
+
         self._name = QLineEdit(profile.display_name if profile else "")
-        self._name.setPlaceholderText("WireGuard - central")
+        self._name.setPlaceholderText("Ivanti - Cliente B")
+        self._name.textChanged.connect(self._on_name_changed)
 
         self._connector = QComboBox()
-        for provider in PROVIDERS:
-            self._connector.addItem(f"{provider.display_name}  ({provider.name})", provider.name)
-        if profile:
-            index = self._connector.findData(profile.connector)
-            if index >= 0:
-                self._connector.setCurrentIndex(index)
+        self._connector.currentIndexChanged.connect(self._on_connector_changed)
 
-        self._target = QLineEdit(profile.launch.target if profile else "")
-        self._target.setPlaceholderText(r"C:\Program Files\WireGuard\wireguard.exe")
-        browse = QPushButton("Examinar…")
-        browse.clicked.connect(self._pick_executable)
-        target_row = QHBoxLayout()
-        target_row.addWidget(self._target, 1)
-        target_row.addWidget(browse)
-
-        self._args = QLineEdit(" ".join(profile.launch.args) if profile else "")
-        self._args.setPlaceholderText("/installtunnelservice   (opcional)")
+        self._client_profile = QLineEdit(profile.client_profile_name if profile else "")
+        self._client_profile_label = QLabel("Conexion en el cliente")
 
         self._tunnel = QComboBox()
         for value, label in _TUNNELS:
             self._tunnel.addItem(label, value)
-        if profile:
-            self._tunnel.setCurrentIndex(self._tunnel.findData(profile.tunnel_type))
-
-        self._networks = QLineEdit(", ".join(profile.target_networks) if profile else "")
-        self._networks.setPlaceholderText("10.0.0.0/8, 172.16.4.0/24")
+        self._tunnel.currentIndexChanged.connect(self._on_tunnel_changed)
 
         self._probe = QLineEdit(profile.probe_ip or "" if profile else "")
-        self._probe.setPlaceholderText("10.20.0.1 — una IP interna que responda a ping")
+        self._probe.setPlaceholderText("10.20.0.1   (se puede dejar para despues)")
+
+        self._networks = QLineEdit(", ".join(profile.target_networks) if profile else "")
+        self._networks.setPlaceholderText("10.0.0.0/8, 172.16.4.0/24   (opcional)")
+
+        # -- Lo avanzado, escondido tras un boton --------------------------
+        self._id = QLineEdit(profile.id if profile else "")
+        self._id.setPlaceholderText("sale del nombre")
+        self._id.textEdited.connect(self._on_id_edited)
+
+        self._target = QLineEdit(profile.launch.target if profile else "")
+        self._target.setPlaceholderText("se busca solo al elegir el cliente")
+        self._target.textEdited.connect(self._on_target_edited)
+        self._browse = QPushButton("Examinar…")
+        self._browse.clicked.connect(self._pick_executable)
+
+        self._args = QLineEdit(" ".join(profile.launch.args) if profile else "")
+        self._args.setPlaceholderText("normalmente vacio")
 
         self._routes = QLineEdit(", ".join(profile.routes) if profile else "")
-        self._routes.setPlaceholderText("opcional: rutas a aplicar")
+        self._routes.setPlaceholderText("para cuando un conector sepa conectar")
 
         self._dns = QLineEdit(", ".join(profile.dns) if profile else "")
-        self._dns.setPlaceholderText("opcional: 10.0.0.53")
+        self._dns.setPlaceholderText("para cuando un conector sepa conectar")
 
         self._breaks = QCheckBox("Corta la conectividad local (pide confirmacion al usuario)")
         self._breaks.setChecked(profile.breaks_local_connectivity if profile else False)
+        self._breaks.clicked.connect(self._on_breaks_clicked)
 
         self._strategy = QComboBox()
         for value, label in _STRATEGIES:
             self._strategy.addItem(label, value)
-        if profile:
-            self._strategy.setCurrentIndex(self._strategy.findData(profile.disconnect_strategy))
 
         self._notes = QLineEdit(profile.notes if profile else "")
 
+        # El desplegable se rellena al final: al elegir el primero se dispara
+        # `_on_connector_changed`, que ya necesita existir todo lo de arriba.
+        for provider in PROVIDERS:
+            self._connector.addItem(self._describe(provider), provider.name)
+
+        self.profile: Profile | None = None
+        self._restore(profile)
+        layout = QVBoxLayout(self)
+        layout.addWidget(_note(WHERE_THE_CONNECTION_LIVES))
+        layout.addWidget(self._essentials())
+        layout.addWidget(self._verification())
+        layout.addWidget(self._advanced_toggle())
+        layout.addWidget(self._advanced)
+        layout.addWidget(self._buttons())
+
+    # -- Construccion de las secciones -------------------------------------
+
+    def _essentials(self) -> QWidget:
+        form = QFormLayout()
+        form.addRow("Cliente VPN", self._connector)
+        form.addRow("Nombre visible", self._name)
+        form.addRow(self._client_profile_label, self._client_profile)
+        form.addRow("Tipo de tunel", self._tunnel)
+
+        box = QGroupBox("Lo imprescindible")
+        box.setLayout(form)
+        return box
+
+    def _verification(self) -> QWidget:
+        form = QFormLayout()
+        form.addRow("IP testigo", self._probe)
+        form.addRow("Redes destino", self._networks)
+        form.addRow("", _note(WHAT_THE_WITNESS_IP_IS))
+
+        box = QGroupBox("Como se comprueba que esta conectada  (opcional)")
+        box.setLayout(form)
+        return box
+
+    def _advanced_toggle(self) -> QWidget:
+        self._advanced = QWidget()
         form = QFormLayout()
         form.addRow("Identificador", self._id)
-        form.addRow("Nombre visible", self._name)
-        form.addRow("Cliente", self._connector)
-        form.addRow("Ejecutable", target_row)
+        form.addRow("Ejecutable", self._target_row())
         form.addRow("Argumentos", self._args)
-        form.addRow("Tipo de tunel", self._tunnel)
-        form.addRow("Redes destino", self._networks)
-        form.addRow("IP testigo", self._probe)
         form.addRow("Rutas", self._routes)
         form.addRow("DNS", self._dns)
         form.addRow("", self._breaks)
         form.addRow("Al desconectar", self._strategy)
         form.addRow("Notas", self._notes)
+        self._advanced.setLayout(form)
+        self._advanced.setVisible(False)
 
+        button = QPushButton("Opciones avanzadas")
+        button.setCheckable(True)
+        button.setFlat(True)
+        button.toggled.connect(self._advanced.setVisible)
+        return button
+
+    def _buttons(self) -> QWidget:
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
+        return buttons
 
-        hint = QLabel(
-            "El identificador es lo unico que viaja por el pipe: letras, digitos, "
-            "punto, guion y guion bajo.\nLa IP testigo es lo que demuestra que el "
-            "tunel funciona de verdad; sin ella no se puede saber."
+    def _restore(self, profile: Profile | None) -> None:
+        if profile is None:
+            self._on_connector_changed()
+            return
+        index = self._connector.findData(profile.connector)
+        if index >= 0:
+            self._connector.setCurrentIndex(index)
+        self._tunnel.setCurrentIndex(self._tunnel.findData(profile.tunnel_type))
+        self._strategy.setCurrentIndex(self._strategy.findData(profile.disconnect_strategy))
+
+    # -- Reacciones --------------------------------------------------------
+
+    def _describe(self, provider: Provider) -> str:
+        """El desplegable dice cual esta instalado de verdad en esta maquina."""
+        found = detect(provider)
+        if found is None:
+            return f"{provider.display_name}  — no encontrado"
+        return f"{provider.display_name}  — instalado"
+
+    def _current_provider(self) -> Provider:
+        return PROVIDERS_BY_NAME[self._connector.currentData()]
+
+    def _on_connector_changed(self) -> None:
+        provider = self._current_provider()
+        self._client_profile_label.setText(f"Nombre del {provider.connection_word}")
+        self._client_profile.setPlaceholderText(
+            f"como se llama este {provider.connection_word} dentro de "
+            f"{provider.display_name}   (opcional)"
         )
-        hint.setWordWrap(True)
+        # Solo se rellena solo lo que no ha tocado nadie: si alguien busco el
+        # .exe a mano, cambiar de cliente no puede borrarselo.
+        if self._target_is_automatic:
+            self._target.setText(detect(provider) or "")
+        self._browse.setEnabled(provider.launch_kind is LaunchKind.EXE)
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(hint)
-        layout.addWidget(buttons)
+    def _on_name_changed(self, text: str) -> None:
+        if self._id_is_automatic:
+            self._id.setText(suggest_profile_id(text))
 
-        self.profile: Profile | None = None
+    def _on_id_edited(self) -> None:
+        self._id_is_automatic = False
+
+    def _on_target_edited(self) -> None:
+        self._target_is_automatic = False
+
+    def _on_breaks_clicked(self) -> None:
+        self._breaks_is_automatic = False
+
+    def _on_tunnel_changed(self) -> None:
+        """Un tunel completo corta la red local salvo que alguien diga lo contrario.
+
+        Es el valor prudente: marcarlo de mas solo cuesta una confirmacion, y
+        no marcarlo cuando tocaba cuesta la sesion RDP del que lo pulse.
+        """
+        if self._breaks_is_automatic:
+            self._breaks.setChecked(self._tunnel.currentData() is TunnelType.FULL)
+
+    def _target_row(self) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._target, 1)
+        layout.addWidget(self._browse)
+        return row
 
     def _pick_executable(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -215,6 +339,7 @@ class ProfileDialog(QDialog):
             # Con separadores de Windows: es lo que espera la validacion y lo
             # que se va a ejecutar.
             self._target.setText(str(Path(path)).replace("/", "\\"))
+            self._target_is_automatic = False
 
     def _save(self) -> None:
         profile = self._build()
@@ -223,24 +348,42 @@ class ProfileDialog(QDialog):
             # Se enseñan todas: quien esta rellenando esto las arregla de una.
             QMessageBox.warning(self, "Faltan cosas", "\n".join(f"· {issue}" for issue in issues))
             return
+
+        # Los avisos no impiden guardar, pero se dicen: quien deja el perfil a
+        # medias tiene que saber que lo deja a medias.
+        warnings = profile.warnings()
+        if warnings and not self._accepts(warnings):
+            return
+
         self.profile = profile
         self.accept()
 
+    def _accepts(self, warnings: list[str]) -> bool:
+        return (
+            QMessageBox.question(
+                self,
+                "Se puede guardar, pero…",
+                "\n".join(f"· {warning}" for warning in warnings) + "\n\n¿Guardar asi?",
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+
     def _build(self) -> Profile:
-        tunnel = self._tunnel.currentData()
+        provider = self._current_provider()
         return Profile(
             id=self._id.text().strip(),
             display_name=self._name.text().strip(),
-            connector=self._connector.currentData(),
+            connector=provider.name,
             launch=LaunchSpec(
-                kind=LaunchKind.EXE,
+                kind=provider.launch_kind,
                 target=self._target.text().strip(),
                 args=tuple(self._args.text().split()),
                 # Los clientes con ventana se lanzan en la sesion del usuario.
                 # Correr como SYSTEM es un caso raro que se edita a mano.
                 context=LaunchContext.USER_SESSION,
             ),
-            tunnel_type=tunnel,
+            tunnel_type=self._tunnel.currentData(),
+            client_profile_name=self._client_profile.text().strip(),
             target_networks=_split(self._networks.text()),
             probe_ip=self._probe.text().strip() or None,
             routes=_split(self._routes.text()),
@@ -313,8 +456,7 @@ class CatalogEditor(QDialog):
     def _refresh(self) -> None:
         self._list.clear()
         for profile in self._profiles:
-            mark = " ⚠ corta la red local" if profile.breaks_local_connectivity else ""
-            self._list.addItem(f"{profile.display_name}  ({profile.tunnel_type.value}){mark}")
+            self._list.addItem(_describe_profile(profile))
 
     def _add(self) -> None:
         dialog = ProfileDialog(self)
@@ -388,3 +530,28 @@ class CatalogEditor(QDialog):
 
 def _split(text: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in text.replace(";", ",").split(",") if part.strip())
+
+
+def _describe_profile(profile: Profile) -> str:
+    """Una linea por VPN, con lo que distingue una de otra.
+
+    El nombre de la conexion va aqui porque es justo lo que separa tres
+    tuneles del mismo FortiClient: sin el, las tres filas dirian lo mismo.
+    """
+    parts = [profile.display_name]
+    if profile.client_profile_name:
+        parts.append(f"→ {profile.client_profile_name}")
+    parts.append(f"({profile.tunnel_type.value})")
+    if profile.breaks_local_connectivity:
+        parts.append("⚠ corta la red local")
+    if not profile.can_verify_state and profile.tunnel_type is not TunnelType.APP:
+        parts.append("· sin IP testigo")
+    return "  ".join(parts)
+
+
+def _note(text: str) -> QLabel:
+    """Un parrafo explicativo, no un campo. Con saltos de linea de verdad."""
+    label = QLabel(text.replace("\n", "<br>"))
+    label.setWordWrap(True)
+    label.setTextFormat(Qt.TextFormat.RichText)
+    return label

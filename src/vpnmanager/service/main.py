@@ -56,6 +56,13 @@ def build_orchestrator(verifier: CatalogVerifier) -> tuple[Orchestrator, Deferre
     if not load.ok:
         log.error("no se ha cargado ningun perfil. El servicio sigue vivo para poder decirlo.")
 
+    # Lo que cojea sin invalidar el perfil. Va como aviso y no como error
+    # porque el catalogo es todo o nada: un perfil al que le falta la IP
+    # testigo no puede dejar al equipo sin las otras VPN.
+    for profile in load.profiles:
+        for warning in profile.warnings():
+            log.warning("catalogo: perfil '%s': %s", profile.id, warning)
+
     user_session = DeferredUserSession()
     registry = build_registry(WindowsProcessLauncher(user_session))
 

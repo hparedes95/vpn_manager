@@ -136,14 +136,35 @@ class ServiceClient:
         )
 
 
+# Estados en los que el cliente oficial ya se abrio. No es lo mismo que
+# "conectado": un perfil sin IP testigo esta abierto y no se sabe mas. Pero a
+# efectos de la interfaz se comportan igual —lo que toca ofrecer es cerrarlo, no
+# volver a abrirlo— y el arbitro rechaza relanzarlos por la misma razon.
+OPEN_STATES = frozenset(
+    {
+        ConnectionState.CONNECTED,
+        ConnectionState.DEGRADED,
+        ConnectionState.UNVERIFIED,
+    }
+)
+
+
+def is_open(summary: ProfileSummary) -> bool:
+    return summary.state in OPEN_STATES
+
+
 def action_label(summary: ProfileSummary) -> str:
     """Lo que dice el boton de un perfil.
 
     Se decide con lo que el conector declara, no con lo que nos gustaria que
     hiciera. Prometer automatizacion que no existe es peor que no tenerla.
     """
-    if summary.state is ConnectionState.CONNECTED:
-        return "Desconectar" if Capability.DISCONNECT in summary.capabilities else "Conectado"
+    if is_open(summary):
+        if Capability.DISCONNECT in summary.capabilities:
+            return "Desconectar"
+        # Sin poder desconectar, el boton solo puede describir lo que hay. Y lo
+        # que hay depende de si se ha llegado a comprobar algo.
+        return "Abierto" if summary.state is ConnectionState.UNVERIFIED else "Conectado"
     if Capability.CONNECT in summary.capabilities:
         return "Conectar"
     return "Abrir cliente"
@@ -155,7 +176,7 @@ def needs_asking_first(summary: ProfileSummary) -> bool:
     La interfaz pregunta, y el servicio ademas lo exige: aunque alguien
     escribiera otra interfaz que no preguntase, la conexion no saldria.
     """
-    return summary.needs_confirmation and summary.state is not ConnectionState.CONNECTED
+    return summary.needs_confirmation and not is_open(summary)
 
 
 __all__ = [

@@ -68,6 +68,7 @@ def make_profile(
     launch: LaunchSpec | None = None,
     probe_ip: str | None = "10.20.0.1",
     disconnect_strategy: DisconnectStrategy = DisconnectStrategy.NONE,
+    client_profile_name: str = "",
 ) -> Profile:
     return Profile(
         id=profile_id,
@@ -75,6 +76,7 @@ def make_profile(
         connector=connector,
         launch=LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE) if launch is None else launch,
         tunnel_type=TunnelType.FULL,
+        client_profile_name=client_profile_name,
         probe_ip=probe_ip,
         disconnect_strategy=disconnect_strategy,
     )
@@ -254,15 +256,29 @@ def test_refusal_lists_every_problem_with_the_profile(
     profile = make_profile(
         profile_id="",
         launch=LaunchSpec(kind=LaunchKind.EXE, target=""),
-        probe_ip=None,
+        client_profile_name="x" * 129,
     )
 
     result = connector.launch(profile)
 
     assert "target vacio" in result.message
     assert "id vacio" in result.message
-    assert "no se puede verificar el estado real" in result.message
+    assert "client_profile_name" in result.message
     assert launcher.calls == []
+
+
+def test_a_profile_without_probe_ip_still_launches(
+    connector: LauncherConnector, launcher: FakeLauncher
+) -> None:
+    """Que no se pueda comprobar el tunel no impide abrir su cliente.
+
+    Es la razon de ser de UNVERIFIED: se abre, y quien mira la interfaz ve que
+    de ese no se sabe nada, en vez de no poder darlo de alta.
+    """
+    result = connector.launch(make_profile(probe_ip=None))
+
+    assert result.ok
+    assert len(launcher.calls) == 1
 
 
 def test_capability_is_checked_before_ownership(connector: LauncherConnector) -> None:

@@ -130,6 +130,8 @@ escribir `sc.exe`, o usar `Start-Service` y `Get-Service`.
 | ❌ | La ventana se abre sola al arrancar | Tabla con los 4 perfiles del ejemplo |
 | ❌ | Tipos y estados | «Completo ⚠», «Parcial», «Por aplicación»; estado en color |
 | ❌ | Botones | Todos dicen «Abrir cliente» (ningún conector verificado) |
+| ❌ | Un perfil sin IP testigo, abierto | Estado «abierto — sin comprobar», en ámbar; el botón dice «Abierto» |
+| ❌ | Volver a pulsarlo | Lo rechaza: «su cliente ya está abierto» (no lo abre dos veces) |
 | ❌ | Icono en la bandeja | Círculo azul con «V»; puede estar bajo la flecha `^` |
 | ❌ | Clic izquierdo en el icono | Abre la ventana |
 | ❌ | Clic derecho en el icono | Menú con «Abrir VPN Manager» y los perfiles |
@@ -201,16 +203,37 @@ pidiendo elevación: el editor corre en **otro proceso, como administrador**. La
 ventana normal no escribe el catálogo, y eso es a propósito — ese fichero decide
 qué binario ejecuta un servicio como SYSTEM.
 
+**Qué se pide y qué no.** El formulario enseña cuatro campos: cliente, nombre,
+nombre de la conexión dentro de ese cliente, y tipo de túnel. La dirección del
+gateway, el puerto, el usuario y el certificado **no están** y no van a estar:
+eso se configura en el cliente oficial. Un FortiClient con dos gateways sigue
+siendo una conexión suya, con failover suyo.
+
 | | Qué | Cómo se ve que está bien |
 |---|---|---|
 | ❌ | Pulsar «Gestionar VPN…» | Sale el aviso de UAC; al aceptar, se abre el editor |
 | ❌ | Cancelar el UAC | La ventana normal sigue funcionando, sin editor |
-| ❌ | «Añadir» con datos válidos | El perfil aparece en la lista del editor |
-| ❌ | Guardar un perfil con una ruta relativa | Lo rechaza y enseña **todos** los fallos juntos, no solo el primero |
-| ❌ | El desplegable de clientes | Solo salen conectores que existen; no se puede teclear otro |
+| ❌ | El desplegable de clientes | Cada uno dice «— instalado» o «— no encontrado» según lo que haya en **esta** máquina |
+| ❌ | Elegir un cliente instalado | El campo «Ejecutable» (en avanzadas) se rellena solo con su ruta |
+| ❌ | Elegir uno no instalado | Se queda vacío; **no** se inventa una ruta |
+| ❌ | Escribir el nombre visible | El identificador sale solo: «Ivanti — Cliente B» → `ivanti-cliente-b` |
+| ❌ | Editar el identificador a mano | Deja de seguir al nombre |
+| ❌ | Etiqueta del nombre de conexión | Cambia con el cliente: «túnel» en WireGuard, «perfil (.ovpn)» en OpenVPN |
+| ❌ | Elegir túnel «Completo» | Se marca solo «corta la conectividad local» |
+| ❌ | Guardar sin IP testigo | **Deja guardar**, avisando de que nunca dirá «conectado» |
+| ❌ | Guardar un `FULL` sin IP testigo | El aviso dice además que el watchdog lo deshará a los 90 s |
+| ❌ | Guardar con una ruta relativa | Lo rechaza y enseña **todos** los fallos juntos, no solo el primero |
 | ❌ | Guardar | Ofrece reiniciar el servicio |
 | ❌ | Aceptar el reinicio | Al volver a la ventana, el perfil nuevo está en la tabla |
 | ❌ | Mirar `profiles.json` después | JSON legible, sin los campos que van por defecto |
+
+**El caso que importa probar de verdad**: añade una VPN tuya real sabiendo solo
+qué cliente es y cómo se llama la conexión dentro de él. Sin IP testigo, sin
+redes, sin tocar avanzadas. Tiene que dejarte, y el perfil tiene que salir en la
+ventana como **«abierto — sin comprobar»** al abrirlo, nunca como «conectado».
+
+Después, con la VPN levantada, averigua una IP interna que responda a ping,
+vuelve al editor y rellénala. Ahí es cuando el estado empieza a significar algo.
 
 Que el editor pida UAC no le da permisos nuevos a nadie: quien puede pasar por
 UAC ya podía abrir ese fichero con el Bloc de notas. Lo que evita es que el

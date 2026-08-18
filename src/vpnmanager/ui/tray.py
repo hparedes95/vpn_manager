@@ -51,6 +51,7 @@ _STATE_MARK = {
     ConnectionState.ERROR: "✕",
     ConnectionState.LAUNCHING: "…",
     ConnectionState.WAITING_AUTH: "…",
+    ConnectionState.UNVERIFIED: "?",
     ConnectionState.DISCONNECTED: "○",
 }
 

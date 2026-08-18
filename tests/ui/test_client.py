@@ -28,6 +28,7 @@ from vpnmanager.core.protocol import (
 from vpnmanager.ui.client import (
     ServiceClient,
     action_label,
+    is_open,
     needs_asking_first,
 )
 
@@ -241,3 +242,53 @@ def test_nothing_is_asked_again_for_something_already_connected() -> None:
         needs_asking_first(summary(state=ConnectionState.CONNECTED, needs_confirmation=True))
         is False
     )
+
+
+# --------------------------------------------------------------------------
+# Perfiles abiertos sin poder comprobarse
+# --------------------------------------------------------------------------
+
+
+def test_an_unverified_profile_counts_as_open() -> None:
+    """Su cliente ya esta abierto: lo que toca ofrecer es cerrarlo."""
+    assert is_open(summary(state=ConnectionState.UNVERIFIED))
+
+
+def test_an_unverified_profile_offers_to_disconnect_when_it_can() -> None:
+    assert (
+        action_label(
+            summary(state=ConnectionState.UNVERIFIED, capabilities=(Capability.DISCONNECT,))
+        )
+        == "Desconectar"
+    )
+
+
+def test_an_unverified_profile_does_not_claim_to_be_connected() -> None:
+    """La diferencia con CONNECTED es justo lo que este estado existe para decir."""
+    assert action_label(summary(state=ConnectionState.UNVERIFIED)) == "Abierto"
+    assert action_label(summary(state=ConnectionState.CONNECTED)) == "Conectado"
+
+
+def test_an_unverified_profile_is_not_asked_for_confirmation_again() -> None:
+    """Ya se confirmo al abrirlo: volver a preguntar seria preguntar por nada."""
+    assert not needs_asking_first(
+        summary(state=ConnectionState.UNVERIFIED, needs_confirmation=True)
+    )
+
+
+def test_a_disconnected_profile_that_breaks_the_network_is_still_asked() -> None:
+    assert needs_asking_first(summary(state=ConnectionState.DISCONNECTED, needs_confirmation=True))
+
+
+def test_an_unverified_profile_is_never_confirmed(launcher: FakeLauncher) -> None:
+    """Y por eso un FULL sin testigo acaba revertido, que es lo seguro.
+
+    Confirmar sin haber comprobado nada seria firmar el acuse sin abrir el
+    paquete: desarmaria el watchdog justo en el caso en el que nadie puede
+    decir si el tunel dejo el equipo alcanzable.
+    """
+    transport = FakeTransport(Response(ok=True, state=ConnectionState.UNVERIFIED))
+
+    ServiceClient(transport, launcher).confirm_if_connected("wireguard-corp")
+
+    assert Command.CONFIRM not in transport.commands()

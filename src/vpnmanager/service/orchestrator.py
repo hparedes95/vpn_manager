@@ -43,6 +43,7 @@ from vpnmanager.core.models import (
     ProbeResult,
     Profile,
     Session,
+    TunnelType,
 )
 from vpnmanager.core.protocol import (
     Command,
@@ -246,7 +247,7 @@ class Orchestrator:
         )
 
         session = self._session(profile.id)
-        session.state = result.state
+        session.state = self._claimed(profile, result.state)
         session.pid = result.pid
         if not result.ok:
             # No se deja armado algo que no llego a conectarse: la reversion
@@ -310,6 +311,24 @@ class Orchestrator:
 
     # -- Interno -----------------------------------------------------------
 
+    def _claimed(self, profile: Profile, state: ConnectionState) -> ConnectionState:
+        """El estado que se apunta cuando quien lo afirma es el cliente oficial.
+
+        Un conector puede devolver CONNECTED porque su cliente lo dice, y eso
+        no basta: un FortiClient puede estar en verde con el tunel caido. Si el
+        perfil no tiene con que comprobarlo, la afirmacion se degrada a
+        UNVERIFIED en vez de propagarse como si fuera un hecho.
+
+        Los APP son la excepcion, y no por comodidad: un reenvio TCP por
+        aplicacion no monta adaptador ni pone rutas, asi que no hay sonda
+        posible y el conector es la unica fuente que existe.
+        """
+        if state is not ConnectionState.CONNECTED:
+            return state
+        if profile.can_verify_state or profile.tunnel_type is TunnelType.APP:
+            return state
+        return ConnectionState.UNVERIFIED
+
     def _refresh(self, profile: Profile) -> ConnectionState:
         """El estado real, no el que dijo el cliente la ultima vez.
 
@@ -318,6 +337,17 @@ class Orchestrator:
         """
         session = self._session(profile.id)
         if session.state in (ConnectionState.DISCONNECTED, ConnectionState.ERROR):
+            return session.state
+
+        # Sin IP testigo no hay nada que sondear. Se dice, en vez de dejarlo
+        # eternamente en "lanzando": ese estado promete que la cosa avanza, y
+        # aqui no va a avanzar nunca porque no hay con que mirarlo.
+        #
+        # Los APP quedan fuera: un reenvio TCP por aplicacion no monta
+        # adaptador ni pone rutas, asi que no le falta el dato, es que no
+        # aplica.
+        if not profile.can_verify_state and profile.tunnel_type is not TunnelType.APP:
+            session.state = ConnectionState.UNVERIFIED
             return session.state
 
         probed = self._probe.check(profile)

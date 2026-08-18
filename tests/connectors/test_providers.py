@@ -13,8 +13,14 @@ from pathlib import Path
 import pytest
 
 from vpnmanager.connectors.base import LaunchOutcome
-from vpnmanager.connectors.providers import PROVIDERS, build_registry
-from vpnmanager.core.models import Capability, LaunchSpec
+from vpnmanager.connectors.providers import (
+    PROVIDERS,
+    PROVIDERS_BY_NAME,
+    Provider,
+    build_registry,
+    detect,
+)
+from vpnmanager.core.models import Capability, LaunchKind, LaunchSpec
 
 
 class NullLauncher:
@@ -86,3 +92,79 @@ def test_the_registry_can_be_built_twice_without_clashing() -> None:
     """Registrar dos veces el mismo nombre revienta, y eso esta bien: aqui no pasa."""
     build_registry(NullLauncher())
     build_registry(NullLauncher())
+
+
+# --------------------------------------------------------------------------
+# Donde esta instalado cada cliente
+# --------------------------------------------------------------------------
+
+
+def provider_named(name: str) -> Provider:
+    return PROVIDERS_BY_NAME[name]
+
+
+def test_detect_returns_the_candidate_that_exists() -> None:
+    """La gracia es no tener que teclear la ruta a mano."""
+    ivanti = provider_named("ivanti")
+    installed = ivanti.candidates[2]
+
+    assert detect(ivanti, exists=lambda path: path == installed) == installed
+
+
+def test_detect_prefers_the_first_candidate_when_several_exist() -> None:
+    """El orden de la lista es la preferencia: lo mas moderno primero."""
+    openvpn = provider_named("openvpn")
+
+    assert detect(openvpn, exists=lambda path: True) == openvpn.candidates[0]
+
+
+def test_detect_returns_nothing_when_the_client_is_not_installed() -> None:
+    """Sin nada instalado se devuelve None, no la primera candidata.
+
+    Rellenar el formulario con una ruta que no existe seria peor que dejarlo
+    vacio: el perfil se guardaria y fallaria al pulsarlo.
+    """
+    assert detect(provider_named("wireguard"), exists=lambda path: False) is None
+
+
+def test_detect_returns_nothing_for_a_provider_without_candidates() -> None:
+    """Forcepoint no tiene ninguna: nadie ha mirado donde se instala."""
+    assert provider_named("forcepoint").candidates == ()
+    assert detect(provider_named("forcepoint"), exists=lambda path: True) is None
+
+
+def test_an_msix_is_offered_without_looking_at_the_disk() -> None:
+    """Una app de Store no tiene ruta que comprobar."""
+    azure = provider_named("azure")
+
+    assert azure.launch_kind is LaunchKind.MSIX
+    assert detect(azure, exists=lambda path: False) == azure.candidates[0]
+
+
+def test_every_exe_candidate_would_pass_the_launch_validation() -> None:
+    """Una candidata que el modelo rechazaria no serviria de nada.
+
+    Rutas absolutas, sin recursos de red y terminadas en .exe: si alguna se
+    escribe mal, el formulario la rellenaria y despues no dejaria guardar.
+    """
+    for provider in PROVIDERS:
+        if provider.launch_kind is not LaunchKind.EXE:
+            continue
+        for candidate in provider.candidates:
+            spec = LaunchSpec(kind=LaunchKind.EXE, target=candidate)
+            assert spec.validate() == [], f"{provider.name}: {candidate}"
+
+
+def test_every_msix_candidate_would_pass_the_launch_validation() -> None:
+    for provider in PROVIDERS:
+        if provider.launch_kind is not LaunchKind.MSIX:
+            continue
+        for candidate in provider.candidates:
+            spec = LaunchSpec(kind=LaunchKind.MSIX, target=candidate)
+            assert spec.validate() == [], f"{provider.name}: {candidate}"
+
+
+def test_every_provider_is_reachable_by_name() -> None:
+    """El desplegable de la interfaz se construye con esto."""
+    assert set(PROVIDERS_BY_NAME) == {provider.name for provider in PROVIDERS}
+    assert len(PROVIDERS_BY_NAME) == len(PROVIDERS)

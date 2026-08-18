@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from vpnmanager.core.models import Capability, ConnectionState
 from vpnmanager.core.protocol import ProfileSummary, Response
-from vpnmanager.ui.client import ServiceClient, action_label, needs_asking_first
+from vpnmanager.ui.client import ServiceClient, action_label, is_open, needs_asking_first
 
 log = logging.getLogger("vpnmgr.ui")
 
@@ -48,6 +48,9 @@ _STATE_COLOR = {
     ConnectionState.ERROR: "#cf222e",
     ConnectionState.LAUNCHING: "#0969da",
     ConnectionState.WAITING_AUTH: "#0969da",
+    # Ni verde ni rojo: no se sabe. Se pinta como un aviso porque lo es,
+    # pero no como un fallo, porque puede estar perfectamente conectada.
+    ConnectionState.UNVERIFIED: "#9a6700",
     ConnectionState.DISCONNECTED: "#57606a",
 }
 
@@ -124,7 +127,7 @@ class MainWindow(QWidget):
         self._journal.append(text)
 
     def _button_for(self, summary: ProfileSummary) -> QPushButton:
-        connected = summary.state in (ConnectionState.CONNECTED, ConnectionState.DEGRADED)
+        connected = is_open(summary)
         if connected and Capability.DISCONNECT in summary.capabilities:
             label = "Desconectar"
         elif connected:
@@ -169,7 +172,7 @@ class MainWindow(QWidget):
         pass
 
     def act_on(self, summary: ProfileSummary) -> None:
-        connected = summary.state in (ConnectionState.CONNECTED, ConnectionState.DEGRADED)
+        connected = is_open(summary)
         if connected:
             if Capability.DISCONNECT in summary.capabilities:
                 self._watching.discard(summary.id)

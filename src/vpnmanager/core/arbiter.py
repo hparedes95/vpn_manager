@@ -42,6 +42,13 @@ REENTRY_REFUSALS = {
     ConnectionState.DEGRADED: "ya esta conectado, con avisos",
     ConnectionState.LAUNCHING: "ya se esta conectando",
     ConnectionState.WAITING_AUTH: "ya se esta conectando: falta que el usuario se autentique",
+    # Su cliente ya se abrio. Que no se pueda comprobar el tunel no es motivo
+    # para volver a lanzarlo: sin IP testigo tampoco sabriamos que el segundo
+    # intento fue a mejor, y un FULL lanzado dos veces es justo lo que el
+    # arbitro existe para evitar.
+    ConnectionState.UNVERIFIED: (
+        "su cliente ya esta abierto; sin IP testigo no se puede comprobar el tunel"
+    ),
 }
 
 

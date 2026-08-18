@@ -28,6 +28,8 @@ from vpnmanager.core.models import (
     TunnelType,
     is_ip_address,
     is_network,
+    is_valid_profile_id,
+    suggest_profile_id,
 )
 
 WIREGUARD_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
@@ -49,6 +51,8 @@ def make_profile(
     tunnel_type: TunnelType = TunnelType.FULL,
     probe_ip: str | None = "10.20.0.1",
     routes: tuple[str, ...] = (),
+    target_networks: tuple[str, ...] = (),
+    client_profile_name: str = "",
 ) -> Profile:
     """Perfil valido por defecto; cada test rompe solo lo que quiere probar."""
     return Profile(
@@ -57,8 +61,10 @@ def make_profile(
         connector="wireguard",
         launch=exe_spec() if launch is None else launch,
         tunnel_type=tunnel_type,
+        client_profile_name=client_profile_name,
         probe_ip=probe_ip,
         routes=routes,
+        target_networks=target_networks,
     )
 
 
@@ -236,11 +242,53 @@ def test_app_profile_without_probe_ip_is_accepted() -> None:
 
 
 @pytest.mark.parametrize("tunnel_type", [TunnelType.FULL, TunnelType.SPLIT])
-def test_network_profile_without_probe_ip_is_rejected(tunnel_type: TunnelType) -> None:
-    """Sin IP testigo el estado seria el que dice el cliente, no el real (HU-02)."""
-    issues = make_profile(tunnel_type=tunnel_type, probe_ip=None).validate()
+def test_network_profile_without_probe_ip_is_valid_but_warned(tunnel_type: TunnelType) -> None:
+    """Falta un dato, no sobra uno malo: el perfil se carga y se avisa (HU-02).
 
-    assert mentions(issues, "no se puede verificar el estado real")
+    Exigirlo aqui era un pez que se muerde la cola: la IP interna que responde
+    solo se averigua conectando la VPN, y la VPN no se podia dar de alta sin
+    ella. El precio de admitirlo es que su estado nunca sera CONNECTED, y eso
+    se comprueba en `test_orchestrator.py`.
+    """
+    profile = make_profile(tunnel_type=tunnel_type, probe_ip=None)
+
+    assert profile.validate() == []
+    assert not profile.can_verify_state
+    # El texto exacto depende del tipo de tunel —un FULL ademas avisa del
+    # watchdog— y cada uno tiene su test. Aqui solo se exige que avise.
+    assert mentions(profile.warnings(), "probe_ip")
+
+
+@pytest.mark.parametrize("tunnel_type", [TunnelType.FULL, TunnelType.SPLIT])
+def test_network_profile_with_probe_ip_has_nothing_to_warn(tunnel_type: TunnelType) -> None:
+    profile = make_profile(
+        tunnel_type=tunnel_type,
+        probe_ip="10.20.0.1",
+        target_networks=("10.0.0.0/8",),
+    )
+
+    assert profile.can_verify_state
+    assert profile.warnings() == []
+
+
+def test_app_profile_without_probe_ip_is_not_even_warned() -> None:
+    """A un APP no le falta el dato: es que no aplica."""
+    assert make_profile(tunnel_type=TunnelType.APP, probe_ip=None).warnings() == []
+
+
+def test_probe_ip_that_is_not_an_ip_is_still_rejected() -> None:
+    """Un dato mal puesto no es lo mismo que un dato que falta."""
+    issues = make_profile(probe_ip="vpn.cliente.com:10443").validate()
+
+    assert mentions(issues, "no es una IP")
+
+
+def test_profile_without_target_networks_is_warned_when_it_can_be_probed() -> None:
+    """Con IP testigo pero sin redes, la comprobacion de ruta se queda coja."""
+    profile = make_profile(probe_ip="10.20.0.1", target_networks=())
+
+    assert profile.validate() == []
+    assert mentions(profile.warnings(), "no se puede comprobar la ruta")
 
 
 def test_profile_propagates_launch_issues() -> None:
@@ -260,11 +308,10 @@ def test_profile_reports_every_issue_at_once() -> None:
         tunnel_type=TunnelType.FULL,
     ).validate()
 
-    assert len(issues) == 4
+    assert len(issues) == 3
     assert mentions(issues, "target vacio")
     assert mentions(issues, "PackageFamilyName")
     assert mentions(issues, "id vacio")
-    assert mentions(issues, "no se puede verificar el estado real")
 
 
 def test_profile_defaults_are_the_conservative_ones() -> None:
@@ -626,5 +673,80 @@ def test_connection_state_values_are_stable() -> None:
         "CONNECTED": "conectado",
         "DEGRADED": "conectado con avisos",
         "DOWN": "caido",
+        "UNVERIFIED": "abierto - sin comprobar",
         "ERROR": "error",
     }
+
+
+# --------------------------------------------------------------------------
+# Sugerir el identificador a partir del nombre
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("display_name", "expected"),
+    [
+        ("WireGuard - central", "wireguard-central"),
+        ("Ivanti — Cliente B", "ivanti-cliente-b"),
+        # En español van a venir acentos y eñes: se transliteran, no se rechazan.
+        ("Conexión Múnich", "conexion-munich"),
+        ("Año 2026", "ano-2026"),
+        # Los separadores no se acumulan ni se quedan en los bordes.
+        ("  FortiClient   VPN  ", "forticlient-vpn"),
+        ("---raro---", "raro"),
+        ("Azure / cliente C", "azure-cliente-c"),
+        # Lo que ya es un id valido se respeta.
+        ("wireguard.central_2", "wireguard.central_2"),
+    ],
+)
+def test_suggest_profile_id(display_name: str, expected: str) -> None:
+    assert suggest_profile_id(display_name) == expected
+
+
+@pytest.mark.parametrize("display_name", ["", "   ", "---", "///", "★"])
+def test_suggest_profile_id_gives_up_instead_of_inventing(display_name: str) -> None:
+    """Sin nada aprovechable no se rellena: un `perfil-1` no lo reconoce nadie."""
+    assert suggest_profile_id(display_name) == ""
+
+
+def test_a_suggested_id_is_always_a_valid_id() -> None:
+    """Lo que sugiere tiene que pasar la validacion que aplica el pipe."""
+    names = [
+        "WireGuard - central",
+        "Ivanti — Cliente B",
+        "Conexión Múnich",
+        "x" * 200,
+        "Perfil (pruebas) #1",
+    ]
+
+    for name in names:
+        suggested = suggest_profile_id(name)
+        assert suggested == "" or is_valid_profile_id(suggested), name
+
+
+def test_a_long_name_is_cut_to_the_limit_and_still_valid() -> None:
+    suggested = suggest_profile_id("cliente " * 30)
+
+    assert len(suggested) <= 64
+    assert is_valid_profile_id(suggested)
+
+
+def test_a_full_tunnel_without_a_witness_ip_is_warned_about_the_watchdog() -> None:
+    """La consecuencia concreta, no un aviso generico.
+
+    La interfaz solo confirma lo que puede comprobar, asi que un FULL sin
+    testigo nunca se confirma y el watchdog lo revierte a los 90 s. Es el
+    comportamiento seguro, pero hay que decirlo al darlo de alta y no dejar
+    que se descubra viendo caer la VPN sola.
+    """
+    warnings = make_profile(tunnel_type=TunnelType.FULL, probe_ip=None).warnings()
+
+    assert mentions(warnings, "se deshara solo a los 90 s")
+
+
+def test_a_split_without_a_witness_ip_is_not_warned_about_the_watchdog() -> None:
+    """Un SPLIT no arma watchdog: el aviso seria falso."""
+    warnings = make_profile(tunnel_type=TunnelType.SPLIT, probe_ip=None).warnings()
+
+    assert not mentions(warnings, "90 s")
+    assert mentions(warnings, "no se puede verificar el estado real")

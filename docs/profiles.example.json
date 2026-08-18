@@ -12,6 +12,7 @@
         "context": "service"
       },
       "tunnel_type": "full",
+      "client_profile_name": "central",
       "target_networks": ["10.0.0.0/8"],
       "probe_ip": "10.20.0.1",
       "dns": ["10.0.0.53"],
@@ -29,6 +30,7 @@
         "target": "C:\\Program Files (x86)\\Common Files\\Pulse Secure\\Integration\\pulselauncher.exe"
       },
       "tunnel_type": "split",
+      "client_profile_name": "Cliente B",
       "target_networks": ["172.16.4.0/24"],
       "probe_ip": "172.16.4.1",
       "routes": ["172.16.4.0/24"],

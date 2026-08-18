@@ -468,3 +468,35 @@ def test_it_is_written_to_be_read_by_a_person() -> None:
 
 def test_an_empty_catalog_can_be_written() -> None:
     assert load_catalog(dump_catalog([]), SIGNATURE, AcceptingVerifier()).ok
+
+
+def test_the_name_of_the_connection_inside_the_client_survives_a_round_trip() -> None:
+    """Es lo que distingue tres tuneles del mismo FortiClient."""
+    original = load(profile_entry(client_profile_name="Cliente B"))
+
+    again = load_catalog(dump_catalog(original.profiles), SIGNATURE, AcceptingVerifier())
+
+    assert again.issues == ()
+    assert again.profiles[0].client_profile_name == "Cliente B"
+
+
+def test_a_profile_without_the_name_of_the_connection_is_valid() -> None:
+    """La mayoria de clientes tienen una sola conexion: el campo sobra."""
+    catalog = load(profile_entry())
+
+    assert catalog.issues == ()
+    assert catalog.profiles[0].client_profile_name == ""
+    assert "client_profile_name" not in dump_catalog(catalog.profiles).decode("utf-8")
+
+
+def test_a_profile_without_a_witness_ip_loads() -> None:
+    """Recien dado de alta desde la interfaz: todavia no se sabe que sondear.
+
+    El catalogo es todo o nada, asi que rechazarlo aqui dejaria el equipo sin
+    ninguna VPN por un perfil al que le falta un dato opcional.
+    """
+    catalog = load(profile_entry(probe_ip=None))
+
+    assert catalog.issues == ()
+    assert catalog.profiles[0].probe_ip is None
+    assert not catalog.profiles[0].can_verify_state

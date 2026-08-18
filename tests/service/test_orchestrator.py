@@ -16,6 +16,7 @@ from vpnmanager.connectors.base import (
     LauncherConnector,
     LaunchOutcome,
 )
+from vpnmanager.core.arbiter import is_occupying
 from vpnmanager.core.models import (
     Capability,
     ConnectionState,
@@ -25,6 +26,7 @@ from vpnmanager.core.models import (
     ProbeResult,
     Profile,
     Result,
+    Session,
     TunnelType,
 )
 from vpnmanager.core.protocol import Command, Request
@@ -136,6 +138,7 @@ def make_profile(
     connector: str = "wireguard",
     breaks_local_connectivity: bool = False,
     disconnect_strategy: DisconnectStrategy = DisconnectStrategy.CLI,
+    probe_ip: str | None = "10.20.0.1",
 ) -> Profile:
     return Profile(
         id=profile_id,
@@ -143,7 +146,7 @@ def make_profile(
         connector=connector,
         launch=LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE),
         tunnel_type=tunnel_type,
-        probe_ip=None if tunnel_type is TunnelType.APP else "10.20.0.1",
+        probe_ip=None if tunnel_type is TunnelType.APP else probe_ip,
         breaks_local_connectivity=breaks_local_connectivity,
         disconnect_strategy=disconnect_strategy,
     )
@@ -155,8 +158,11 @@ FULL_RDP = make_profile("full-rdp", breaks_local_connectivity=True)
 SPLIT_A = make_profile("split-a", TunnelType.SPLIT)
 ONLY_LAUNCH = make_profile("solo-abrir", connector="forcepoint")
 ORPHAN = make_profile("huerfano", connector="nadie")
+# Recien dado de alta: se sabe que cliente lo abre y nada mas. Es el caso que
+# permite anadir una VPN sin haberla conectado nunca.
+NO_WITNESS = make_profile("sin-testigo", TunnelType.SPLIT, probe_ip=None)
 
-CATALOG = {p.id: p for p in (FULL_A, FULL_B, FULL_RDP, SPLIT_A, ONLY_LAUNCH, ORPHAN)}
+CATALOG = {p.id: p for p in (FULL_A, FULL_B, FULL_RDP, SPLIT_A, ONLY_LAUNCH, ORPHAN, NO_WITNESS)}
 
 
 @pytest.fixture
@@ -750,3 +756,93 @@ def test_stopping_the_service_undoes_what_is_still_armed(
 
 def test_stopping_with_nothing_armed_does_nothing(orchestrator: Orchestrator) -> None:
     assert orchestrator.shutdown() == ()
+
+
+# --------------------------------------------------------------------------
+# Perfiles sin IP testigo
+# --------------------------------------------------------------------------
+
+
+def test_a_profile_without_a_witness_ip_is_never_probed(
+    orchestrator: Orchestrator, probe: FakeProbe
+) -> None:
+    """No hay nada que preguntarle a la red: preguntarlo seria gastarlo en balde."""
+    orchestrator.handle(connect("sin-testigo"))
+
+    orchestrator.handle(Request(command=Command.LIST))
+
+    assert "sin-testigo" not in probe.calls
+
+
+def test_a_profile_without_a_witness_ip_reports_unverified(
+    orchestrator: Orchestrator,
+) -> None:
+    """Ni conectado ni caido: abierto y sin forma de saberlo."""
+    orchestrator.handle(connect("sin-testigo"))
+
+    response = orchestrator.handle(Request(command=Command.LIST))
+    summary = next(p for p in response.profiles if p.id == "sin-testigo")
+
+    assert summary.state is ConnectionState.UNVERIFIED
+
+
+def test_a_profile_without_a_witness_ip_never_reports_connected(
+    orchestrator: Orchestrator, probe: FakeProbe
+) -> None:
+    """La regla del estado real sigue en pie.
+
+    Aunque la sonda dijese que si a todo —que aqui no se la llega a preguntar—
+    un perfil sin testigo no puede afirmar que esta conectado. Es la garantia
+    que hace aceptable dejar el campo vacio.
+    """
+    probe.connected = True
+    orchestrator.handle(connect("sin-testigo"))
+
+    for _ in range(3):
+        response = orchestrator.handle(Request(command=Command.LIST))
+
+    summary = next(p for p in response.profiles if p.id == "sin-testigo")
+    assert summary.state is not ConnectionState.CONNECTED
+
+
+def test_an_unverified_profile_is_not_relaunched(orchestrator: Orchestrator) -> None:
+    """Volver a pulsarlo no abre el cliente por segunda vez."""
+    orchestrator.handle(connect("sin-testigo"))
+
+    response = orchestrator.handle(connect("sin-testigo"))
+
+    assert not response.ok
+    assert "ya esta abierto" in response.message
+
+
+def test_an_unverified_profile_still_occupies_the_machine(
+    orchestrator: Orchestrator,
+) -> None:
+    """Sin poder comprobarlo hay que dar por hecho que ocupa, no lo contrario.
+
+    Un perfil abierto del que no se sabe nada pudo dejar rutas puestas. Tratarlo
+    como libre porque no se puede mirar seria justo la suposicion peligrosa.
+    """
+    unverified = CATALOG["sin-testigo"]
+    session = Session(profile_id=unverified.id, state=ConnectionState.UNVERIFIED)
+
+    assert is_occupying(session)
+
+
+def test_an_app_profile_is_not_reported_as_unverified(
+    registry: ConnectorRegistry, network: FakeNetwork, probe: FakeProbe
+) -> None:
+    """A un APP no le falta el testigo: es que no monta tunel que sondear."""
+    app = make_profile("app-iap", TunnelType.APP)
+    orchestrator = Orchestrator(
+        catalog={**CATALOG, app.id: app},
+        registry=registry,
+        network=network,
+        probe=probe,
+    )
+    orchestrator.handle(connect("app-iap"))
+
+    response = orchestrator.handle(Request(command=Command.LIST))
+    summary = next(p for p in response.profiles if p.id == "app-iap")
+
+    assert summary.state is not ConnectionState.UNVERIFIED

@@ -52,6 +52,7 @@ _PROFILE_KEYS: Final = frozenset(
         "connector",
         "launch",
         "tunnel_type",
+        "client_profile_name",
         "target_networks",
         "probe_ip",
         "dns",
@@ -147,6 +148,8 @@ def _profile_payload(profile: Profile) -> dict[str, object]:
         "launch": _launch_payload(profile.launch),
         "tunnel_type": profile.tunnel_type.value,
     }
+    if profile.client_profile_name:
+        data["client_profile_name"] = profile.client_profile_name
     if profile.target_networks:
         data["target_networks"] = list(profile.target_networks)
     if profile.probe_ip is not None:
@@ -251,6 +254,7 @@ def _read_profile(entry: object, index: int) -> tuple[Profile | None, list[str]]
             connector=_string(data, "connector", where),
             launch=_launch_spec(data.get("launch"), f"{where}.launch"),
             tunnel_type=_enum(data, "tunnel_type", TunnelType, where),
+            client_profile_name=_string(data, "client_profile_name", where, default=""),
             target_networks=_strings(data, "target_networks", where),
             probe_ip=_optional_string(data, "probe_ip", where),
             dns=_strings(data, "dns", where),

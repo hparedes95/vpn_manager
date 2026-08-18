@@ -30,6 +30,45 @@ de la documentación de cada fabricante, **no** de una prueba.
 | Azure VPN Client | MSIX de Store | Solo lanzado, `shell:AppsFolder\<PFN>!App` | — | — |
 | IAP Desktop | No es VPN | Túnel TCP por app sobre GCP IAP | — | — |
 
+## Rutas candidatas de instalación
+
+`connectors/providers.py` lleva, por cliente, una lista de rutas donde **suele**
+instalarse. El editor del catálogo las usa para rellenar el ejecutable solo, en
+vez de hacer teclear `C:\Program Files (x86)\Common Files\Pulse Secure\...` a
+mano.
+
+**Ninguna está verificada**, igual que el resto de esta página. No hace falta que
+lo estén: no se usan como dato, sino como sitios donde mirar. `detect()` solo
+devuelve la que existe de verdad en esa máquina, y si no hay ninguna, el
+formulario deja el campo vacío y el usuario la busca con «Examinar…». Una
+candidata equivocada no rompe nada, simplemente no aparece.
+
+Si encuentras la ruta real de un cliente en un puesto, añádela **la primera** de
+su lista y anótalo aquí. Forcepoint no tiene ninguna: nadie ha mirado dónde se
+instala, y una ruta inventada solo serviría para no encontrarlo con más
+ceremonia.
+
+## El nombre de la conexión dentro del cliente
+
+`Profile.client_profile_name` es cómo se llama esa conexión **en el cliente
+oficial**. Un FortiClient con tres túneles configurados se abre igual para los
+tres; sin este campo, tres perfiles del mismo cliente serían indistinguibles en
+la ventana.
+
+Es un selector, no configuración de conexión. **La dirección del gateway, el
+puerto, el usuario y el certificado no entran aquí ni entrarán**: viven en el
+almacén del cliente oficial. Si el catálogo los guardara, habría que pasárselos
+al cliente por línea de comandos, y ese es justo el camino que convierte el pipe
+en una escalada de privilegios.
+
+Hoy solo se muestra. Cuando un conector se verifique y sepa pedir una conexión
+concreta, este es el valor que le pasaría, como un elemento más de la lista de
+argumentos — nunca concatenado en una línea, y nunca recibido por el pipe.
+
+Cómo lo llama cada cliente (`Provider.connection_word`) se usa para etiquetar el
+campo: «túnel» en WireGuard, «perfil (.ovpn)» en OpenVPN, «portal» en
+GlobalProtect.
+
 ## Cómo se rellena una fila
 
 1. Versión exacta del cliente (la que reporta el propio cliente, no la del
