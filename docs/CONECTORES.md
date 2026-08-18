@@ -25,7 +25,7 @@ de la documentación de cada fabricante, **no** de una prueba.
 | OpenVPN | Túnel propio | `openvpn-gui.exe --command connect` | — | — |
 | Ivanti Secure Access | Corporativo | `pulselauncher.exe` | — | — |
 | GlobalProtect | Corporativo | Media, según versión | — | — |
-| FortiClient VPN | Corporativo | Media o nula (nula con SSO) | — | — |
+| FortiClient VPN | Corporativo | Media o nula (nula con SSO) | Se abre desde su carpeta (18/08/2026) | `LAUNCH` |
 | Forcepoint VPN | Corporativo | Sin verificar, asumir solo lanzado | — | — |
 | Azure VPN Client | MSIX de Store | Solo lanzado, `shell:AppsFolder\<PFN>!App` | — | — |
 | IAP Desktop | No es VPN | Túnel TCP por app sobre GCP IAP | — | — |
@@ -100,3 +100,24 @@ lanzado mientras nadie compruebe lo contrario.
 Con SSO la automatización puede ser directamente imposible. Si es el caso, se
 queda en `LAUNCH` y se documenta aquí para que no vuelva a intentarse cada seis
 meses.
+
+**Hay que arrancarlo desde su propia carpeta.** Es una app Electron, y lanzado
+con otro directorio de trabajo revienta antes de abrir su ventana:
+
+```
+A JavaScript error occurred in the main process
+TypeError: Cannot read properties of null (reading 'TraceLog')
+    at new Logger (...\FortiClient\resources\app.asar\assets\js\main.js)
+```
+
+Su `Logger` busca la configuración por ruta relativa y no la encuentra. Visto en
+un puesto real (18/08/2026), lanzando `FortiClient.exe` desde el directorio de
+VPN Manager.
+
+Por eso `WindowsProcessLauncher` arranca siempre con `cwd` en la carpeta del
+propio ejecutable, que es lo que hace un acceso directo de Windows con su
+«Iniciar en». No es un apaño para Fortinet: es lo que esperan los programas que
+el explorador arranca.
+
+Instalado en el puesto de pruebas en
+`C:\Program Files\Fortinet\FortiClient\FortiClient.exe`.

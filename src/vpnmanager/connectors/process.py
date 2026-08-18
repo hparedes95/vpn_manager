@@ -29,6 +29,7 @@ caracter mas y no un separador.
 from __future__ import annotations
 
 import subprocess
+from pathlib import PureWindowsPath
 from typing import Protocol
 
 from vpnmanager.connectors.base import LaunchOutcome
@@ -92,6 +93,8 @@ class WindowsProcessLauncher:
             process = subprocess.Popen(
                 self._argv(spec),
                 shell=False,
+                # Desde su propia carpeta, como hace un acceso directo.
+                cwd=self._working_directory(spec),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -103,6 +106,33 @@ class WindowsProcessLauncher:
             return LaunchOutcome(started=False, detail=f"no se pudo arrancar: {error.strerror}")
 
         return LaunchOutcome(started=True, pid=self._pid_of(spec, process.pid))
+
+    def _working_directory(self, spec: LaunchSpec) -> str | None:
+        """La carpeta del propio cliente, como haria un acceso directo.
+
+        Un acceso directo de Windows lleva su «Iniciar en», y el explorador lo
+        pone a la carpeta del programa. `subprocess.Popen` no: hereda el
+        directorio de quien lanza, que aqui es la carpeta de VPN Manager.
+
+        Hay clientes que no lo soportan. FortiClient VPN, que es una app
+        Electron, revienta al arrancar con
+        `TypeError: Cannot read properties of null (reading 'TraceLog')` en su
+        propio Logger: busca su configuracion por ruta relativa y no la
+        encuentra. Visto en un puesto real.
+
+        No es un apaño para un cliente concreto: arrancar un programa desde su
+        carpeta es lo que hacen el explorador y el menu de inicio, y es lo que
+        esos programas esperan. Lo raro era lo que haciamos antes.
+
+        Con MSIX no aplica: quien arranca es el explorador y el shell resuelve
+        la app por su Package Family Name, sin ninguna ruta de por medio.
+        """
+        if spec.kind is not LaunchKind.EXE:
+            return None
+        parent = PureWindowsPath(spec.target).parent
+        # `validate()` ya exige ruta absoluta, asi que esto siempre tiene padre.
+        # Si algun dia no lo tuviera, se hereda el de siempre en vez de fallar.
+        return str(parent) if str(parent) not in ("", ".") else None
 
     def _argv(self, spec: LaunchSpec) -> list[str]:
         """La lista de argumentos. Nunca una cadena que alguien tenga que trocear."""

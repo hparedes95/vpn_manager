@@ -216,3 +216,45 @@ def test_the_unavailable_session_never_starts_anything() -> None:
 
     assert not outcome.started
     assert outcome.pid is None
+
+
+# --------------------------------------------------------------------------
+# Desde que carpeta se arranca
+# --------------------------------------------------------------------------
+
+
+def test_a_client_starts_from_its_own_folder(popen: FakePopen) -> None:
+    """Como haria un acceso directo, que lleva su «Iniciar en».
+
+    `subprocess.Popen` hereda el directorio de quien lanza —la carpeta de VPN
+    Manager— y hay clientes que no lo soportan: FortiClient VPN revienta en su
+    propio Logger buscando configuracion por ruta relativa.
+    """
+    WindowsProcessLauncher().start_here(LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE))
+
+    assert popen.kwargs["cwd"] == r"C:\Program Files\WireGuard"
+
+
+def test_the_folder_is_the_one_of_the_target_not_of_vpn_manager(popen: FakePopen) -> None:
+    forticlient = r"C:\Program Files\Fortinet\FortiClient\FortiClient.exe"
+
+    WindowsProcessLauncher().start_here(LaunchSpec(kind=LaunchKind.EXE, target=forticlient))
+
+    assert popen.kwargs["cwd"] == r"C:\Program Files\Fortinet\FortiClient"
+
+
+def test_an_msix_inherits_the_folder(popen: FakePopen) -> None:
+    """Quien arranca es el explorador y no hay ninguna ruta de por medio."""
+    WindowsProcessLauncher().start_here(LaunchSpec(kind=LaunchKind.MSIX, target=AZURE_PFN))
+
+    assert popen.kwargs["cwd"] is None
+
+
+def test_the_folder_does_not_change_the_arguments(popen: FakePopen) -> None:
+    """El .exe se sigue invocando por su ruta completa, no por su nombre."""
+    WindowsProcessLauncher().start_here(
+        LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE, args=("/installtunnelservice",))
+    )
+
+    assert popen.argv == [WIREGUARD_EXE, "/installtunnelservice"]
+    assert popen.kwargs["shell"] is False
