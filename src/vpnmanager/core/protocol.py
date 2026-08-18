@@ -76,6 +76,15 @@ class Command(Enum):
 # LIST es el unico comando que no habla de un perfil concreto.
 COMMANDS_WITHOUT_PROFILE: Final = frozenset({Command.LIST})
 
+# Los que pueden costar la conectividad local del equipo, y por tanto la
+# sesion remota de quien los pulsa. CONNECT es evidente. LAUNCH lo es menos:
+# abrir un cliente no conecta nada, salvo que ese cliente este configurado
+# para conectar al arrancar, y eso desde aqui no se puede saber.
+#
+# El resto de comandos NO admiten la clave: el protocolo es cerrado y una
+# clave que no aplica es superficie que no hace falta.
+COMMANDS_WITH_CONFIRMATION: Final = frozenset({Command.CONNECT, Command.LAUNCH})
+
 
 @dataclass(frozen=True)
 class Request:
@@ -87,9 +96,10 @@ class Request:
 
     command: Command
     profile_id: str | None = None
-    # Solo en CONNECT: el usuario ha aceptado explicitamente perder la
-    # conectividad local (HU-03). El servicio no puede darlo por hecho, porque
-    # quien pulsa suele estar dentro de la sesion RDP que se va a cortar.
+    # Solo en los comandos de COMMANDS_WITH_CONFIRMATION: el usuario ha
+    # aceptado explicitamente perder la conectividad local (HU-03). El servicio
+    # no puede darlo por hecho, porque quien pulsa suele estar dentro de la
+    # sesion RDP que se va a cortar.
     user_confirmed: bool = False
 
     def encode(self) -> bytes:
@@ -99,7 +109,7 @@ class Request:
         }
         if self.profile_id is not None:
             payload["profile_id"] = self.profile_id
-        if self.command is Command.CONNECT:
+        if self.command in COMMANDS_WITH_CONFIRMATION:
             payload["user_confirmed"] = self.user_confirmed
         return _encode(payload)
 
@@ -374,7 +384,7 @@ def _allowed_keys(command: Command) -> frozenset[str]:
     keys = {"version", "command"}
     if command not in COMMANDS_WITHOUT_PROFILE:
         keys.add("profile_id")
-    if command is Command.CONNECT:
+    if command in COMMANDS_WITH_CONFIRMATION:
         keys.add("user_confirmed")
     return frozenset(keys)
 
@@ -425,7 +435,7 @@ def _read_profile_id(data: dict[str, object], command: Command) -> str | None:
 
 
 def _read_user_confirmed(data: dict[str, object], command: Command) -> bool:
-    if command is not Command.CONNECT:
+    if command not in COMMANDS_WITH_CONFIRMATION:
         return False
     return _read_bool(data, "user_confirmed", default=False)
 

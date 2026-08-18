@@ -846,3 +846,89 @@ def test_an_app_profile_is_not_reported_as_unverified(
     summary = next(p for p in response.profiles if p.id == "app-iap")
 
     assert summary.state is not ConnectionState.UNVERIFIED
+
+
+# --------------------------------------------------------------------------
+# Abrir el cliente para configurarlo
+# --------------------------------------------------------------------------
+
+
+def launch(profile_id: str, *, confirmed: bool = False) -> Request:
+    return Request(command=Command.LAUNCH, profile_id=profile_id, user_confirmed=confirmed)
+
+
+def test_opening_a_client_does_not_go_through_the_arbiter(
+    orchestrator: Orchestrator, launcher: FakeLauncher
+) -> None:
+    """Abrir una ventana no ocupa la maquina ni desaloja a nadie.
+
+    Es el camino que hace falta para dar de alta una VPN: la configuracion
+    —SSO, IPSec, certificados, gateways— se hace en el cliente del fabricante,
+    que es el unico que la entiende.
+    """
+    orchestrator.handle(connect("full-a"))
+    calls_before = len(launcher.calls)
+
+    response = orchestrator.handle(launch("split-a"))
+
+    assert response.ok
+    assert len(launcher.calls) == calls_before + 1
+
+
+def test_opening_a_client_takes_no_photograph_of_the_network(
+    orchestrator: Orchestrator, network: FakeNetwork
+) -> None:
+    """No conecta nada, asi que no hay nada que deshacer despues."""
+    orchestrator.handle(launch("split-a"))
+
+    assert network.snapshots == 0
+
+
+def test_opening_a_client_that_breaks_the_network_needs_confirmation(
+    orchestrator: Orchestrator, launcher: FakeLauncher
+) -> None:
+    """Abrir no es conectar, salvo que el cliente conecte solo al arrancar.
+
+    Desde aqui no se puede saber, y la diferencia es la sesion remota de quien
+    lo pulse. Preguntar de mas cuesta un clic.
+    """
+    response = orchestrator.handle(launch("full-rdp"))
+
+    assert not response.ok
+    assert "corta la conectividad local" in response.message
+    assert launcher.calls == []
+
+
+def test_with_confirmation_the_client_does_open(
+    orchestrator: Orchestrator, launcher: FakeLauncher
+) -> None:
+    response = orchestrator.handle(launch("full-rdp", confirmed=True))
+
+    assert response.ok
+    assert len(launcher.calls) == 1
+
+
+def test_opening_a_client_never_claims_to_be_connected(orchestrator: Orchestrator) -> None:
+    """Abrir el cliente no dice nada sobre el tunel."""
+    response = orchestrator.handle(launch("split-a"))
+
+    assert response.state is not ConnectionState.CONNECTED
+
+
+def test_opening_the_client_of_an_unverifiable_profile_says_so(
+    orchestrator: Orchestrator,
+) -> None:
+    response = orchestrator.handle(launch("sin-testigo"))
+
+    assert response.ok
+    assert response.state in (ConnectionState.LAUNCHING, ConnectionState.UNVERIFIED)
+
+
+def test_a_profile_outside_the_catalog_is_not_opened(
+    orchestrator: Orchestrator, launcher: FakeLauncher
+) -> None:
+    """La regla de siempre: solo ids del catalogo firmado."""
+    response = orchestrator.handle(launch("no-existe"))
+
+    assert not response.ok
+    assert launcher.calls == []

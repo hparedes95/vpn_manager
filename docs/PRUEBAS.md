@@ -129,7 +129,10 @@ escribir `sc.exe`, o usar `Start-Service` y `Get-Service`.
 |---|---|---|
 | ❌ | La ventana se abre sola al arrancar | Tabla con los 4 perfiles del ejemplo |
 | ❌ | Tipos y estados | «Completo ⚠», «Parcial», «Por aplicación»; estado en color |
-| ❌ | Botones | Todos dicen «Abrir cliente» (ningún conector verificado) |
+| ❌ | Dos botones por fila | «Abrir cliente…» (configurar) y el de conectar, separados |
+| ❌ | Botón de conectar | Dice «Abrir cliente» (ningún conector verificado) |
+| ❌ | **«Abrir cliente…»** | Se abre la ventana del cliente oficial, en tu sesión |
+| ❌ | Si el `.exe` no está donde dice el catálogo | Sale un error diciéndolo, **no** un «lanzando» que no hace nada |
 | ❌ | Un perfil sin IP testigo, abierto | Estado «abierto — sin comprobar», en ámbar; el botón dice «Abierto» |
 | ❌ | Volver a pulsarlo | Lo rechaza: «su cliente ya está abierto» (no lo abre dos veces) |
 | ❌ | Icono en la bandeja | Círculo azul con «V»; puede estar bajo la flecha `^` |
@@ -306,14 +309,49 @@ Reinicia el servicio después de cada cambio: **el catálogo se lee al arrancar*
 Empieza por una **`SPLIT`**. No toca la ruta por defecto, así que no puede
 dejarte fuera.
 
+### 6.1 El recorrido completo, en orden
+
+Este es el flujo para el que está pensado el programa. La configuración de la
+VPN —usuario, gateway, certificado, SSO, IPSec— **se hace una vez en el cliente
+oficial**, que es el único que la entiende. VPN Manager no la reimplementa ni
+la guarda; abre el sitio donde se hace y luego gestiona la conexión.
+
+1. Da de alta el perfil en **«Gestionar VPN…»** con lo mínimo: cliente, nombre,
+   nombre de la conexión y tipo de túnel.
+2. Pulsa **«Abrir cliente…»** en su fila.
+3. Configura la VPN **dentro del cliente oficial** y **guárdala allí**.
+4. Conéctala a mano en el cliente, una vez, para comprobar que la configuración
+   es correcta.
+5. Con ella levantada, averigua una IP interna que responda a ping.
+6. Vuelve al editor y ponla como IP testigo.
+
+A partir de ahí el estado del perfil significa algo.
+
 | | Qué | Cómo se ve que está bien |
 |---|---|---|
-| ❌ | Pulsar «Abrir cliente» en un `SPLIT` | Se abre el cliente oficial **en tu sesión** |
+| ❌ | **«Abrir cliente…»** en un `SPLIT` | Se abre el cliente oficial **en tu sesión**, con su ventana |
+| ❌ | El cliente no está donde dice el catálogo | Error explícito, no un «lanzando» silencioso |
+| ❌ | Configurar y guardar en el cliente | La configuración sobrevive al cerrar el cliente |
 | ❌ | Conectar a mano en el cliente | La ventana pasa a «conectado» en 10 s |
 | ❌ | Estado real | Si desconectas desde el cliente, pasa a «caído» |
 
-Ese segundo punto es la prueba de fuego de la sonda: el estado tiene que venir
+Ese último punto es la prueba de fuego de la sonda: el estado tiene que venir
 de la red, no de lo que diga el cliente.
+
+### 6.2 Abrir el cliente de un perfil que corta la red
+
+Abrir un cliente no conecta nada — salvo que ese cliente esté configurado para
+conectar al arrancar, y eso desde aquí no se puede saber.
+
+| | Qué | Cómo se ve que está bien |
+|---|---|---|
+| ❌ | «Abrir cliente…» en un perfil `FULL` que corta la red | Avisa **antes** y se puede cancelar |
+| ❌ | Cancelarlo | No se abre nada; en Actividad: «cancelado por el usuario» |
+| ❌ | Aceptarlo | Se abre el cliente |
+
+**No** se arma el watchdog al abrir un cliente, porque no se está conectando
+nada. Si tu cliente conecta solo al arrancar y el perfil es `FULL`, ahí no hay
+red de seguridad: hazlo con la VM delante.
 
 ## 7. El watchdog — provócalo a propósito
 

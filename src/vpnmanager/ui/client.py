@@ -70,8 +70,15 @@ class ServiceClient:
     def list_profiles(self) -> tuple[ProfileSummary, ...]:
         return self._ask(Request(command=Command.LIST)).profiles
 
-    def launch(self, profile_id: str) -> Response:
-        return self._ask(Request(command=Command.LAUNCH, profile_id=profile_id))
+    def launch(self, profile_id: str, *, user_confirmed: bool = False) -> Response:
+        """Abre el cliente oficial para configurarlo. No conecta nada."""
+        return self._ask(
+            Request(
+                command=Command.LAUNCH,
+                profile_id=profile_id,
+                user_confirmed=user_confirmed,
+            )
+        )
 
     def connect(self, profile_id: str, *, user_confirmed: bool = False) -> Response:
         return self._ask(
@@ -117,11 +124,13 @@ class ServiceClient:
         self._stream = MessageStream(MAX_RESPONSE_BYTES)
         self._transport.send(request.encode())
         response = self._read()
-        if response.launch is not None:
-            # El servicio no puede arrancar un cliente con ventana. Se hace
-            # aqui, con los permisos de este usuario y en su escritorio.
-            self.last_launch = self._run(response.launch)
-        return response
+        if response.launch is None:
+            return response
+
+        # El servicio no puede arrancar un cliente con ventana. Se hace aqui,
+        # con los permisos de este usuario y en su escritorio.
+        self.last_launch = outcome = self._run(response.launch)
+        return response if outcome.started else _launch_failed(response, outcome)
 
     def _read(self) -> Response:
         """Lee del transporte hasta tener una respuesta entera."""
@@ -134,6 +143,32 @@ class ServiceClient:
         return self._launcher.start_here(
             LaunchSpec(kind=order.kind, target=order.target, args=order.args)
         )
+
+
+def _launch_failed(response: Response, outcome: LaunchOutcome) -> Response:
+    """El servicio dijo que si, pero el cliente no llego a arrancar.
+
+    Quien lanza el binario es esta interfaz, no el servicio: el servicio vive
+    en la sesion 0 y solo puede mandar la orden, asi que da por bueno el
+    arranque en cuanto la manda. El resultado de verdad —que el .exe este donde
+    dice el catalogo, que el usuario pueda ejecutarlo— solo se conoce aqui.
+
+    Antes ese resultado se guardaba en `last_launch` y no lo leia nadie: si el
+    cliente no estaba instalado en la ruta del catalogo, la ventana decia
+    «lanzando» y no pasaba nada. Un fallo que se ve como un exito es peor que
+    un fallo.
+
+    El estado se conserva tal cual: el servicio ya lo apunto y esta respuesta
+    no puede cambiarselo. Lo arregla la sonda, o el watchdog.
+    """
+    return Response(
+        ok=False,
+        message=f"el servicio dio la orden, pero el cliente no arranco: {outcome.detail}",
+        state=response.state,
+        profiles=response.profiles,
+        manual_disconnect_first=response.manual_disconnect_first,
+        warnings=response.warnings,
+    )
 
 
 # Estados en los que el cliente oficial ya se abrio. No es lo mismo que

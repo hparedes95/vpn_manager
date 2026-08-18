@@ -122,7 +122,7 @@ class Orchestrator:
 
         match request.command:
             case Command.LAUNCH:
-                return self._launch(profile)
+                return self._launch(profile, user_confirmed=request.user_confirmed)
             case Command.CONNECT:
                 return self._connect(profile, user_confirmed=request.user_confirmed)
             case Command.DISCONNECT:
@@ -187,17 +187,42 @@ class Orchestrator:
             profiles=tuple(self._summary(profile) for profile in self._catalog.values()),
         )
 
-    def _launch(self, profile: Profile) -> Response:
-        """Abrir el cliente oficial. No conecta nada, y no lo finge."""
+    def _launch(self, profile: Profile, *, user_confirmed: bool = False) -> Response:
+        """Abrir el cliente oficial, para configurarlo. No conecta nada.
+
+        Es el camino que hace falta para dar de alta una VPN: la configuracion
+        de verdad —SSO, IPSec, certificados, gateways— se hace una vez en el
+        cliente del fabricante, que es el unico que la entiende. Este programa
+        no la reimplementa ni la guarda; solo abre el sitio donde se hace.
+
+        No pasa por el arbitro a proposito: abrir una ventana no ocupa la
+        maquina y no desaloja a nadie. Con una excepcion, que es la que puede
+        costar cara.
+        """
         connector = self._registry.for_profile(profile)
         if connector is None:
             return self._orphan(profile)
 
+        # Abrir no es conectar... salvo que el cliente este configurado para
+        # conectar al abrirse, cosa que aqui no se puede saber. Si ese perfil
+        # corta la conectividad local, la diferencia entre las dos cosas es la
+        # sesion remota de quien lo pulse, asi que se exige la misma
+        # confirmacion que para conectar. Preguntar de mas cuesta un clic.
+        if profile.breaks_local_connectivity and not user_confirmed:
+            return Response(
+                ok=False,
+                message=(
+                    "este perfil corta la conectividad local. Abrir su cliente no deberia "
+                    "conectar nada, pero si el cliente esta configurado para conectar al "
+                    "arrancar, perderas la red. Hace falta confirmarlo"
+                ),
+            )
+
         result = connector.launch(profile)
         session = self._session(profile.id)
-        session.state = result.state
+        session.state = self._claimed(profile, result.state)
         session.pid = result.pid
-        return Response(ok=result.ok, message=result.message, state=result.state)
+        return Response(ok=result.ok, message=result.message, state=session.state)
 
     def _connect(self, profile: Profile, *, user_confirmed: bool) -> Response:
         plan = self._arbiter.plan_connection(profile.id, self._sessions.values())

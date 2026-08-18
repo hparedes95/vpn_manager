@@ -67,8 +67,8 @@ class MainWindow(QWidget):
         self.setWindowTitle("VPN Manager")
         self.resize(760, 420)
 
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["VPN", "Tipo", "Estado", ""])
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["VPN", "Tipo", "Estado", "", ""])
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -77,6 +77,7 @@ class MainWindow(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
 
         self._status = QLabel("Conectando con el servicio…")
 
@@ -117,7 +118,8 @@ class MainWindow(QWidget):
             self._table.setItem(row, 0, QTableWidgetItem(summary.display_name))
             self._table.setItem(row, 1, _tunnel_item(summary))
             self._table.setItem(row, 2, _state_item(summary))
-            self._table.setCellWidget(row, 3, self._button_for(summary))
+            self._table.setCellWidget(row, 3, self._configure_button_for(summary))
+            self._table.setCellWidget(row, 4, self._button_for(summary))
 
     def show_problem(self, detail: str) -> None:
         self._status.setText(f"Sin conexion con el servicio: {detail}")
@@ -125,6 +127,23 @@ class MainWindow(QWidget):
 
     def note(self, text: str) -> None:
         self._journal.append(text)
+
+    def _configure_button_for(self, summary: ProfileSummary) -> QPushButton:
+        """Abrir el cliente oficial, para configurarlo alli.
+
+        Separado de conectar a proposito. La configuracion de una VPN —SSO,
+        IPSec, certificados, gateways— se hace una vez en el cliente del
+        fabricante, que es el unico que la entiende, y este programa no la
+        reimplementa. Sin este boton habia que ir a buscar el cliente al menu
+        de inicio, que es justo el paso que este programa deberia ahorrar.
+        """
+        button = QPushButton("Abrir cliente…")
+        button.setToolTip(
+            "Abre el cliente oficial para configurar la VPN alli: usuario, "
+            "gateway, certificados, SSO. No conecta nada."
+        )
+        button.clicked.connect(lambda _checked=False, s=summary: self.configure(s))
+        return button
 
     def _button_for(self, summary: ProfileSummary) -> QPushButton:
         connected = is_open(summary)
@@ -170,6 +189,41 @@ class MainWindow(QWidget):
 
     def requested_refresh(self) -> None:  # se sustituye desde la bandeja
         pass
+
+    def configure(self, summary: ProfileSummary) -> None:
+        """Abre el cliente oficial y no toca nada mas."""
+        if summary.needs_confirmation and not self._confirm_opening(summary):
+            self.note(f"· {summary.display_name}: cancelado por el usuario")
+            return
+
+        response = self._client.launch(summary.id, user_confirmed=summary.needs_confirmation)
+        self._report(summary, response)
+        if response.ok:
+            self.note(
+                "  → configura la VPN en su cliente y guardala alli; "
+                "aqui solo se gestiona la conexion"
+            )
+        self.requested_refresh()
+
+    def _confirm_opening(self, summary: ProfileSummary) -> bool:
+        """Abrir no es conectar, salvo que el cliente conecte solo al abrirse.
+
+        Aqui no hay forma de saberlo, y la diferencia entre las dos cosas es la
+        sesion remota de quien lo pulse. Preguntar de mas cuesta un clic.
+        """
+        return (
+            QMessageBox.warning(
+                self,
+                "Este perfil corta la conectividad local",
+                f"Abrir el cliente de «{summary.display_name}» no deberia conectar "
+                f"nada.\n\nPero si ese cliente esta configurado para conectar al "
+                f"arrancar, perderas la red de este equipo, y con ella cualquier "
+                f"sesion remota contra el.\n\n¿Abrirlo de todas formas?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
 
     def act_on(self, summary: ProfileSummary) -> None:
         connected = is_open(summary)

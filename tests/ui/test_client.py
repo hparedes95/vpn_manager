@@ -292,3 +292,92 @@ def test_an_unverified_profile_is_never_confirmed(launcher: FakeLauncher) -> Non
     ServiceClient(transport, launcher).confirm_if_connected("wireguard-corp")
 
     assert Command.CONFIRM not in transport.commands()
+
+
+# --------------------------------------------------------------------------
+# Cuando el cliente oficial no llega a arrancar
+# --------------------------------------------------------------------------
+
+
+class FailingLauncher:
+    """El .exe no esta donde dice el catalogo, o no se puede ejecutar."""
+
+    def __init__(self, detail: str = "no se pudo arrancar: No such file or directory") -> None:
+        self.detail = detail
+        self.specs: list[LaunchSpec] = []
+
+    def start_here(self, spec: LaunchSpec) -> LaunchOutcome:
+        self.specs.append(spec)
+        return LaunchOutcome(started=False, detail=self.detail)
+
+
+def order() -> LaunchOrder:
+    return LaunchOrder(kind=LaunchKind.EXE, target=WIREGUARD_EXE)
+
+
+def test_a_launch_that_fails_is_not_reported_as_success() -> None:
+    """El servicio dice que si en cuanto manda la orden; quien lanza es esto.
+
+    Sin esto, un cliente que no esta instalado en la ruta del catalogo daba
+    "lanzando" y no pasaba nada: un fallo con aspecto de exito.
+    """
+    transport = FakeTransport(Response(ok=True, message="lanzando", launch=order()))
+
+    response = ServiceClient(transport, FailingLauncher()).connect("wireguard-corp")
+
+    assert not response.ok
+
+
+def test_a_failed_launch_says_what_went_wrong() -> None:
+    launcher = FailingLauncher("no se pudo arrancar: El sistema no puede encontrar el archivo")
+    transport = FakeTransport(Response(ok=True, launch=order()))
+
+    response = ServiceClient(transport, launcher).connect("wireguard-corp")
+
+    assert "no arranco" in response.message
+    assert "no puede encontrar el archivo" in response.message
+
+
+def test_a_failed_launch_keeps_the_state_the_service_reported() -> None:
+    """Esta respuesta no puede cambiar el estado: lo apunto el servicio."""
+    transport = FakeTransport(Response(ok=True, state=ConnectionState.LAUNCHING, launch=order()))
+
+    response = ServiceClient(transport, FailingLauncher()).connect("wireguard-corp")
+
+    assert response.state is ConnectionState.LAUNCHING
+
+
+def test_a_launch_that_works_is_left_alone(launcher: FakeLauncher) -> None:
+    transport = FakeTransport(Response(ok=True, message="lanzando", launch=order()))
+
+    response = ServiceClient(transport, launcher).connect("wireguard-corp")
+
+    assert response.ok
+    assert response.message == "lanzando"
+
+
+def test_the_outcome_is_still_available_afterwards() -> None:
+    client = ServiceClient(FakeTransport(Response(ok=True, launch=order())), FailingLauncher())
+
+    client.connect("wireguard-corp")
+
+    assert client.last_launch is not None
+    assert not client.last_launch.started
+
+
+def test_opening_the_client_to_configure_it_asks_for_launch(launcher: FakeLauncher) -> None:
+    """Configurar es un camino aparte de conectar."""
+    transport = FakeTransport(Response(ok=True))
+
+    ServiceClient(transport, launcher).launch("wireguard-corp")
+
+    assert transport.commands() == [Command.LAUNCH]
+
+
+def test_opening_the_client_can_carry_the_confirmation(launcher: FakeLauncher) -> None:
+    """Abrir un perfil que corta la red tambien se confirma."""
+    transport = FakeTransport(Response(ok=True))
+
+    ServiceClient(transport, launcher).launch("wireguard-corp", user_confirmed=True)
+
+    assert transport.sent[0].user_confirmed is True
