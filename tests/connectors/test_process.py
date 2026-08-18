@@ -17,6 +17,7 @@ import pytest
 from vpnmanager.connectors.process import (
     UnavailableUserSession,
     WindowsProcessLauncher,
+    clean_environment,
 )
 from vpnmanager.core.models import LaunchContext, LaunchKind, LaunchSpec
 
@@ -258,3 +259,106 @@ def test_the_folder_does_not_change_the_arguments(popen: FakePopen) -> None:
 
     assert popen.argv == [WIREGUARD_EXE, "/installtunnelservice"]
     assert popen.kwargs["shell"] is False
+
+
+# --------------------------------------------------------------------------
+# Con que entorno se arranca
+# --------------------------------------------------------------------------
+
+BUNDLE = r"C:\Program Files\VpnManager\ui\_internal"
+BUNDLE_DIRS = (BUNDLE,)
+
+
+def test_the_bundle_is_taken_out_of_the_path() -> None:
+    """Era lo que impedia abrir FortiClient.
+
+    Su modulo nativo fallaba con el error 126 de Windows —falta una DLL de la
+    que depende, no el modulo— porque heredaba nuestro PATH y cargaba nuestro
+    VCRUNTIME en vez del suyo.
+    """
+    environ = {"PATH": rf"{BUNDLE};C:\Windows\system32;C:\Windows"}
+
+    env = clean_environment(environ, BUNDLE_DIRS)
+
+    assert env["PATH"] == r"C:\Windows\system32;C:\Windows"
+
+
+def test_subdirectories_of_the_bundle_also_go() -> None:
+    environ = {"PATH": rf"{BUNDLE}\PySide6;C:\Windows\system32"}
+
+    env = clean_environment(environ, BUNDLE_DIRS)
+
+    assert env["PATH"] == r"C:\Windows\system32"
+
+
+def test_the_rest_of_the_environment_survives() -> None:
+    """El cliente necesita el entorno del usuario: solo se quita lo nuestro."""
+    environ = {
+        "PATH": r"C:\Windows\system32",
+        "USERPROFILE": r"C:\Users\test",
+        "APPDATA": r"C:\Users\test\AppData\Roaming",
+        "HOMEDRIVE": "H:",
+    }
+
+    env = clean_environment(environ, BUNDLE_DIRS)
+
+    assert env["USERPROFILE"] == r"C:\Users\test"
+    assert env["APPDATA"] == r"C:\Users\test\AppData\Roaming"
+    assert env["HOMEDRIVE"] == "H:"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_MEIPASS2",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "SSL_CERT_FILE",
+    ],
+)
+def test_what_the_bundle_added_is_removed(name: str) -> None:
+    """Apuntan a nuestras librerias y a nuestros certificados, no a los suyos."""
+    env = clean_environment({name: "lo que sea", "PATH": ""}, BUNDLE_DIRS)
+
+    assert name not in env
+
+
+def test_a_path_comparison_ignores_case_and_separators() -> None:
+    """Windows no distingue mayusculas en las rutas."""
+    environ = {"PATH": r"c:\program files\vpnmanager\ui\_internal\;C:\Windows"}
+
+    env = clean_environment(environ, BUNDLE_DIRS)
+
+    assert env["PATH"] == r"C:\Windows"
+
+
+def test_without_a_bundle_the_path_is_left_alone() -> None:
+    """Ejecutando desde el repositorio no hay nada nuestro que quitar."""
+    environ = {"PATH": r"C:\Windows\system32;C:\Windows"}
+
+    assert clean_environment(environ, ()).get("PATH") == r"C:\Windows\system32;C:\Windows"
+
+
+def test_an_environment_without_path_does_not_break() -> None:
+    assert clean_environment({"USERPROFILE": "x"}, BUNDLE_DIRS) == {"USERPROFILE": "x"}
+
+
+def test_the_launch_uses_the_clean_environment(popen: FakePopen) -> None:
+    """Que exista la funcion no sirve de nada si no se usa al arrancar."""
+    WindowsProcessLauncher().start_here(LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE))
+
+    assert "env" in popen.kwargs
+    assert popen.kwargs["env"] is not None
+
+
+def test_the_clean_environment_is_never_empty(popen: FakePopen) -> None:
+    """Pasar un entorno vacio dejaria al cliente sin USERPROFILE ni APPDATA.
+
+    Ahi es donde los clientes VPN guardan su configuracion, que es justo lo
+    que este programa no quiere tocar.
+    """
+    WindowsProcessLauncher().start_here(LaunchSpec(kind=LaunchKind.EXE, target=WIREGUARD_EXE))
+
+    assert len(popen.kwargs["env"]) > 0

@@ -101,8 +101,8 @@ Con SSO la automatización puede ser directamente imposible. Si es el caso, se
 queda en `LAUNCH` y se documenta aquí para que no vuelva a intentarse cada seis
 meses.
 
-**Hay que arrancarlo desde su propia carpeta.** Es una app Electron, y lanzado
-con otro directorio de trabajo revienta antes de abrir su ventana:
+**Hay que arrancarlo desde su propia carpeta y con el entorno limpio.** Es una
+app Electron, y lanzado desde otro proceso revienta antes de abrir su ventana:
 
 ```
 A JavaScript error occurred in the main process
@@ -110,14 +110,37 @@ TypeError: Cannot read properties of null (reading 'TraceLog')
     at new Logger (...\FortiClient\resources\app.asar\assets\js\main.js)
 ```
 
-Su `Logger` busca la configuración por ruta relativa y no la encuentra. Visto en
-un puesto real (18/08/2026), lanzando `FortiClient.exe` desde el directorio de
-VPN Manager.
+Ese `TraceLog` de `null` es el síntoma, no la causa. La causa está unas líneas
+antes, al cargar su módulo nativo:
 
-Por eso `WindowsProcessLauncher` arranca siempre con `cwd` en la carpeta del
-propio ejecutable, que es lo que hace un acceso directo de Windows con su
-«Iniciar en». No es un apaño para Fortinet: es lo que esperan los programas que
-el explorador arranca.
+```
+Error: Cannot open ...\assets\js\guimessenger64.node:
+    No se puede encontrar el módulo especificado.
+Error: Cannot open ...\assets\js\guimessenger32.node: Error: error: 126
+```
+
+**126 es `ERROR_MOD_NOT_FOUND`**, y no dice que falte ese `.node`: dice que falta
+una DLL de la que ese `.node` depende. Al fallar los dos, el loader devuelve
+`null` y `new Logger` revienta leyendo `TraceLog`.
+
+Windows resuelve esas dependencias por el directorio del ejecutable, los del
+sistema, el directorio actual y el **`PATH`**. Ahí estaban las dos causas:
+
+1. **El directorio de trabajo.** `subprocess.Popen` hereda el de quien lanza; un
+   acceso directo lleva su «Iniciar en» apuntando a la carpeta del programa.
+2. **El `PATH` heredado.** VPN Manager es un bundle de PyInstaller con su propio
+   `VCRUNTIME140.dll`, `MSVCP140.dll` y las DLL de Qt. El cliente heredaba ese
+   `PATH` y cargaba las nuestras en vez de las suyas.
+
+Por eso arrancaba bien desde PowerShell y no desde el programa **aun con el
+directorio correcto**: la segunda causa sobrevivió al primer arreglo.
+
+`WindowsProcessLauncher` arranca ahora con `cwd` en la carpeta del ejecutable y
+con `clean_environment()`, que quita del `PATH` todo lo que caiga dentro de
+nuestro bundle y borra las variables que PyInstaller, Qt y certifi añaden. No es
+un apaño para Fortinet: ningún cliente tiene por qué heredar nuestras librerías.
+
+Visto en un puesto real (18/08/2026).
 
 Instalado en el puesto de pruebas en
 `C:\Program Files\Fortinet\FortiClient\FortiClient.exe`.
