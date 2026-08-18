@@ -145,40 +145,91 @@ escribir `sc.exe`, o usar `Start-Service` y `Get-Service`.
 **Esto es lo más importante de todo el plan.** Hazlo antes de conectar ningún
 túnel.
 
+Con ruta completa y sin `cd`: si el `cd` se pierde, `-File .\algo.ps1` falla
+diciendo que el fichero no existe, y eso parece un fallo de la instalación sin
+serlo.
+
 ```powershell
-cd "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
+$ps = "C:\Program Files\VpnManager\svc\_internal\vpnmanager\net\ps"
+$f  = "$env:TEMP\estado.json"
 ```
 
 ### 4.1 Fotografiar el estado ✅
 
 ```powershell
-$f = "$env:TEMP\estado.json"
-& powershell -ExecutionPolicy Bypass -File .\Get-NetState.ps1 | Set-Content $f -Encoding UTF8
+& powershell -ExecutionPolicy Bypass -File "$ps\Get-NetState.ps1" | Set-Content $f -Encoding UTF8
 Get-Content $f
 ```
 
 Ya validado: devuelve JSON con rutas, DNS y adaptadores.
 
-### 4.2 Restaurar ⚠️
+Cada entrada de `dns` lleva ahora `static`: `true` si esos servidores están
+puestos a mano, `false` si vienen del DHCP, `null` si no se ha podido averiguar.
+Es lo que decide cómo se devuelven a su sitio.
+
+### 4.2 Restaurar — rutas ✅
 
 ```powershell
 # Romper algo, como haría un túnel: una ruta con salto real
 route add 10.99.0.0 mask 255.255.0.0 192.168.0.9
 
-& powershell -ExecutionPolicy Bypass -File .\Restore-NetState.ps1 -StatePath $f
+& powershell -ExecutionPolicy Bypass -File "$ps\Restore-NetState.ps1" -StatePath $f
 
 # Comprobar
 Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.NextHop -ne '0.0.0.0' }
 ```
 
-**Tiene que pasar**: `ok = true`, la `10.99.0.0/16` desaparece, y **tus dos
-rutas por defecto siguen** (`192.168.59.2` y `192.168.0.9`).
+**Tiene que pasar**: `ok = true`, `removedRoutes = 1`, la `10.99.0.0/16`
+desaparece y **tu ruta por defecto sigue**.
+
+Comprobado en un puesto: quitó la ruta inyectada y dejó la legítima.
 
 Si `ok` es `false`, mira el campo `failures`: dice qué parte no se pudo.
 
 **Si esto no funciona, no conectes ningún túnel completo.**
 
-### 4.3 La sonda ❌
+### 4.3 Restaurar — DNS ⚠️
+
+Lo del DNS es más traicionero que lo de las rutas, porque **escribirlo no es
+inocuo**: `Set-DnsClientServerAddress -ServerAddresses` deja el adaptador
+configurado **a mano**. Un adaptador que tomaba el DNS por DHCP y al que se le
+reescriben «los mismos» servidores no vuelve a como estaba: se queda clavado en
+esos, y deja de seguir al DHCP.
+
+La primera versión reaplicaba el DNS de todos los adaptadores en cada
+restauración, tocara o no el túnel el DNS. Ahora solo escribe **lo que ha
+cambiado**, y la foto anota si cada adaptador lo tenía a mano o por DHCP para
+devolverlo a lo que era.
+
+```powershell
+# Sin tocar el DNS: la restauración no debe escribir nada
+& powershell -ExecutionPolicy Bypass -File "$ps\Get-NetState.ps1" | Set-Content $f -Encoding UTF8
+& powershell -ExecutionPolicy Bypass -File "$ps\Restore-NetState.ps1" -StatePath $f
+```
+
+**Tiene que pasar**: `restoredDns = 0`. Si sale distinto de cero sin haber
+tocado el DNS, está volviendo a escribir lo que ya estaba bien.
+
+Y con el DNS movido a mano, que es el caso que sí tiene que arreglar:
+
+```powershell
+# Mira cómo está antes (Ethernet o el que uses)
+Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table InterfaceIndex, InterfaceAlias, ServerAddresses
+
+# Rompe uno, como haría un túnel
+Set-DnsClientServerAddress -InterfaceIndex 10 -ServerAddresses 10.99.0.53
+
+& powershell -ExecutionPolicy Bypass -File "$ps\Restore-NetState.ps1" -StatePath $f
+
+# Y comprueba que volvió a lo que era
+Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table InterfaceIndex, InterfaceAlias, ServerAddresses
+Get-NetIPInterface -InterfaceIndex 10 -AddressFamily IPv4 | Format-List InterfaceAlias, Dhcp
+```
+
+**Tiene que pasar**: `restoredDns = 1`, el `10.99.0.53` desaparece, y si ese
+adaptador tomaba el DNS por DHCP **vuelve a tomarlo por DHCP**, no clavado.
+
+### 4.4 La sonda ❌
 
 Con una IP que responda a ping y una red que exista en tu tabla de rutas:
 

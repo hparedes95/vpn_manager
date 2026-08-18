@@ -9,6 +9,7 @@ que los tres scripts del paquete, se prueba ahora.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -364,3 +365,62 @@ def test_a_restore_that_fails_is_reported() -> None:
     runner = StubRunner(ok=False)
 
     assert PowerShellNetworkController(runner).restore(NetworkSnapshot(payload="{}")) is False  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# Lo que queda escrito de una restauracion
+# --------------------------------------------------------------------------
+
+
+def test_a_restore_records_what_it_did(caplog: pytest.LogCaptureFixture) -> None:
+    """Una reversion pasa de madrugada y sin nadie delante.
+
+    Al dia siguiente, "se restauro correctamente" no dice si hizo falta hacer
+    algo. Los contadores son la unica prueba que queda.
+    """
+    runner = StubRunner(
+        ok=True,
+        data={"ok": True, "removedRoutes": 2, "restoredRoutes": 1, "restoredDns": 0},
+    )
+
+    with caplog.at_level(logging.INFO, logger="vpnmgr"):
+        PowerShellNetworkController(runner).restore(  # type: ignore[arg-type]
+            NetworkSnapshot(payload="{}")
+        )
+
+    assert "removedRoutes=2" in caplog.text
+    assert "restoredRoutes=1" in caplog.text
+    assert "restoredDns=0" in caplog.text
+
+
+def test_an_incomplete_restore_records_which_part_failed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ "No se pudo restaurar" a secas no sirve de nada a las tres de la manana."""
+    runner = StubRunner(
+        ok=False,
+        data={"ok": False, "removedRoutes": 1, "failures": ["no se pudo quitar una ruta sobrante"]},
+    )
+
+    with caplog.at_level(logging.INFO, logger="vpnmgr"):
+        PowerShellNetworkController(runner).restore(  # type: ignore[arg-type]
+            NetworkSnapshot(payload="{}")
+        )
+
+    assert "incompleta" in caplog.text
+    assert "no se pudo quitar una ruta sobrante" in caplog.text
+
+
+def test_a_restore_log_carries_no_addresses(caplog: pytest.LogCaptureFixture) -> None:
+    """Ni rutas ni servidores DNS en el log: solo cuantos."""
+    runner = StubRunner(
+        ok=True,
+        data={"ok": True, "removedRoutes": 1, "restoredRoutes": 0, "restoredDns": 1},
+    )
+
+    with caplog.at_level(logging.INFO, logger="vpnmgr"):
+        PowerShellNetworkController(runner).restore(  # type: ignore[arg-type]
+            NetworkSnapshot(payload='{"dns":[{"servers":["10.0.0.53"]}]}')
+        )
+
+    assert "10.0.0.53" not in caplog.text

@@ -57,6 +57,7 @@ function Test-Managed {
 
 $failures = New-Object System.Collections.ArrayList
 $restoredRoutes = 0
+$removedRoutes = 0
 $restoredDns = 0
 
 # --- Rutas ---------------------------------------------------------------
@@ -85,6 +86,12 @@ try {
         if (-not $wanted.ContainsKey($key)) {
             try {
                 Remove-NetRoute -InputObject $current -Confirm:$false -ErrorAction Stop
+                # Se cuenta aparte de las que se vuelven a poner. Quitar es lo
+                # que de verdad deshace un tunel —el tunel ANADE una ruta por
+                # defecto— asi que sin este contador el JSON decia
+                # "restoredRoutes: 0" justo cuando acababa de hacer su trabajo,
+                # y no habia forma de distinguirlo de no haber hecho nada.
+                $removedRoutes++
             }
             catch {
                 [void] $failures.Add("no se pudo quitar una ruta sobrante")
@@ -121,17 +128,63 @@ catch {
 }
 
 # --- DNS -----------------------------------------------------------------
+# Solo se toca lo que ha cambiado. Escribir el DNS de un adaptador NO es una
+# operacion inocua: `Set-DnsClientServerAddress -ServerAddresses` lo clava a
+# mano, asi que reaplicar a ciegas los servidores de la foto convertia todos
+# los adaptadores que tomaban el DNS por DHCP en adaptadores configurados a
+# mano, congelados en lo que hubiera en ese momento. En un portatil que cambia
+# de red, eso es quedarse sin resolucion al salir de la oficina.
+#
+# Antes esto pasaba en CADA reversion, tocara o no el tunel el DNS.
+
+function Get-CurrentDns {
+    param([int] $InterfaceIndex)
+    try {
+        $current = Get-DnsClientServerAddress -InterfaceIndex $InterfaceIndex `
+                                              -AddressFamily IPv4 -ErrorAction Stop
+        return @($current.ServerAddresses)
+    }
+    catch {
+        return $null  # no se pudo mirar: distinto de "no tiene ninguno"
+    }
+}
+
+function Test-SameServers {
+    param($Left, $Right)
+    if ($null -eq $Left -or $null -eq $Right) { return $false }
+    $a = @($Left)
+    $b = @($Right)
+    if ($a.Count -ne $b.Count) { return $false }
+    for ($i = 0; $i -lt $a.Count; $i++) {
+        if ([string] $a[$i] -ne [string] $b[$i]) { return $false }
+    }
+    return $true
+}
 
 foreach ($entry in @($snapshot.dns)) {
+    $index = [int] $entry.interfaceIndex
+    $wantedServers = @($entry.servers)
+
+    if (Test-SameServers (Get-CurrentDns $index) $wantedServers) {
+        continue  # nadie lo ha movido: no hay nada que devolver a su sitio
+    }
+
     try {
-        $servers = @($entry.servers)
-        if ($servers.Count -gt 0) {
-            Set-DnsClientServerAddress -InterfaceIndex ([int] $entry.interfaceIndex) `
-                                       -ServerAddresses $servers -ErrorAction Stop
+        # `static` puede no venir en una foto vieja, y entonces vale $null. En
+        # ese caso se escriben los servidores en vez de resetear: en plena
+        # reversion, recuperar la resolucion pesa mas que conservar el DHCP, y
+        # equivocarse hacia el reset deja el equipo sin DNS si eran estaticos.
+        $wasStatic = if ($null -eq $entry.static) { $wantedServers.Count -gt 0 } `
+                     else { [bool] $entry.static }
+
+        if ($wasStatic -and $wantedServers.Count -gt 0) {
+            Set-DnsClientServerAddress -InterfaceIndex $index `
+                                       -ServerAddresses $wantedServers -ErrorAction Stop
         }
         else {
-            # Sin servidores en la foto: el adaptador los tomaba por DHCP.
-            Set-DnsClientServerAddress -InterfaceIndex ([int] $entry.interfaceIndex) `
+            # Los tomaba del DHCP: se le devuelve al DHCP, no se le clavan los
+            # que tenia. Es la unica forma de dejarlo como estaba de verdad.
+            Set-DnsClientServerAddress -InterfaceIndex $index `
                                        -ResetServerAddresses -ErrorAction Stop
         }
         $restoredDns++
@@ -151,6 +204,7 @@ catch {
 Write-Result @{
     ok             = ($failures.Count -eq 0)
     restoredRoutes = $restoredRoutes
+    removedRoutes  = $removedRoutes
     restoredDns    = $restoredDns
     failures       = @($failures)
     error          = if ($failures.Count -eq 0) { '' } else { 'la red no se restauro del todo' }

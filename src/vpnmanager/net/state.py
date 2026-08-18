@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import tempfile
 from pathlib import Path
 
 from vpnmanager.core.watchdog import NetworkSnapshot
 from vpnmanager.net.powershell import RESTORE_TIMEOUT_SECONDS, PowerShellRunner, Script
+
+log = logging.getLogger("vpnmgr")
 
 
 class PowerShellNetworkController:
@@ -66,14 +69,41 @@ class PowerShellNetworkController:
             # Con su propio plazo: restaurar hace una llamada al sistema por
             # ruta y por adaptador, y que el plazo de una lectura corte una
             # restauracion a medias es el peor resultado posible.
-            return self._runner.run(
+            result = self._runner.run(
                 Script.RESTORE_NET_STATE,
                 timeout_seconds=RESTORE_TIMEOUT_SECONDS,
                 StatePath=handle.name,
-            ).ok
+            )
+            _log_what_was_restored(result.data, ok=result.ok)
+            return result.ok
         finally:
             with contextlib.suppress(OSError):
                 Path(handle.name).unlink()
+
+
+def _log_what_was_restored(data: dict[str, object], *, ok: bool) -> None:
+    """Deja constancia de que hizo la restauracion, no solo de si fue bien.
+
+    Una reversion ocurre sin nadie delante, de madrugada y con la sesion
+    remota ya cortada. Cuando alguien llegue a ese log al dia siguiente, «se
+    restauro correctamente» no le dice si hizo falta hacer algo ni que se
+    toco. Los contadores son la unica prueba que va a quedar.
+
+    Los numeros son numeros: no llevan ni rutas ni servidores DNS, que es
+    justo lo que no debe acabar en un log.
+    """
+    counts = {key: data.get(key, 0) for key in ("removedRoutes", "restoredRoutes", "restoredDns")}
+    detail = ", ".join(f"{key}={value}" for key, value in counts.items())
+    if ok:
+        log.info("restauracion de red: %s", detail)
+        return
+
+    failures = data.get("failures")
+    log.error(
+        "restauracion de red incompleta: %s; fallos: %s",
+        detail,
+        "; ".join(str(item) for item in failures) if isinstance(failures, list) else "sin detalle",
+    )
 
 
 def _route_summary(data: dict[str, object]) -> tuple[str, ...]:
