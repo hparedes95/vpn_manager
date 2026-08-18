@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from vpnmanager.core.models import Capability, ConnectionState
 from vpnmanager.core.protocol import ProfileSummary, Response
 from vpnmanager.ui.client import ServiceClient, action_label, is_open, needs_asking_first
+from vpnmanager.version import read_version
 
 log = logging.getLogger("vpnmgr.ui")
 
@@ -64,7 +65,9 @@ class MainWindow(QWidget):
         # Compartido con la bandeja: lo que hay que seguir confirmando.
         self._watching = watching
 
-        self.setWindowTitle("VPN Manager")
+        # Con la version: durante las pruebas se instalan builds seguidas y
+        # "esto lleva ya el arreglo?" tiene que poder contestarse mirando.
+        self.setWindowTitle(f"VPN Manager {read_version()}")
         self.resize(760, 420)
 
         self._table = QTableWidget(0, 5)

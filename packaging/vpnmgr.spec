@@ -11,10 +11,21 @@
 #
 # Se construye con:  pyinstaller packaging/vpnmgr.spec --noconfirm
 
+import os
 from pathlib import Path
 
 ROOT = Path(SPECPATH).parent
 SRC = ROOT / "src"
+
+# La version viaja dentro del bundle. Sin esto, saber que build hay
+# instalada en un puesto es mirar la fecha del .exe, que es adivinar; y
+# durante las pruebas eso significa depurar un arreglo que a lo mejor ni
+# esta ahi. En CI el valor lleva el hash corto del commit.
+VERSION = (os.environ.get("VPNMGR_VERSION") or "").strip() or "desarrollo"
+VERSION_FILE = ROOT / "build" / "VERSION"
+VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+VERSION_FILE.write_text(VERSION, encoding="utf-8")
+VERSION_DATA = [(str(VERSION_FILE), "vpnmanager")]
 
 # Los .ps1 son codigo: sin ellos el servicio no sabe leer ni restaurar la red.
 PS_SCRIPTS = [
@@ -24,7 +35,7 @@ PS_SCRIPTS = [
 service_analysis = Analysis(
     [str(ROOT / "packaging" / "entry_svc.py")],
     pathex=[str(SRC)],
-    datas=PS_SCRIPTS,
+    datas=PS_SCRIPTS + VERSION_DATA,
     hiddenimports=[
         # pywin32 se importa dentro de las funciones para que el resto del
         # proyecto se pueda probar sin el; PyInstaller no lo ve solo.
@@ -59,6 +70,7 @@ COLLECT(
 ui_analysis = Analysis(
     [str(ROOT / "packaging" / "entry_ui.py")],
     pathex=[str(SRC)],
+    datas=VERSION_DATA,
     excludes=["tkinter"],
 )
 

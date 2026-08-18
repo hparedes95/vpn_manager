@@ -58,6 +58,7 @@ TRAY_MAY_IMPORT = frozenset(
         # interfaz que toca el catalogo, y por eso puede importarlo.
         "vpnmanager.security.catalog",
         "vpnmanager.connectors.providers",
+        "vpnmanager.version",
     }
 )
 

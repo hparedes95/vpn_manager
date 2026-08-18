@@ -50,6 +50,10 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Construir los ejecutables
+        # La version entra aqui tambien, y no solo en el instalador: viaja
+        # dentro del bundle para que la aplicacion pueda decir que build es.
+        env:
+          VPNMGR_VERSION: ${{ steps.version.outputs.version }}
         run: pyinstaller packaging/vpnmgr.spec --noconfirm --clean
 
       - name: Construir el instalador

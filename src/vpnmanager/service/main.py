@@ -28,6 +28,7 @@ from vpnmanager.security.catalog import CatalogVerifier, RejectingVerifier, load
 from vpnmanager.service.dispatcher import DeferredUserSession
 from vpnmanager.service.orchestrator import Orchestrator
 from vpnmanager.service.pipe import DEFAULT_ALLOWED_GROUPS, PipeServer
+from vpnmanager.version import read_version
 
 log = logging.getLogger("vpnmgr")
 
@@ -188,6 +189,10 @@ def setup_logging() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=handlers,
     )
+    # Lo primero de cada arranque. Un log que no dice que version lo
+    # escribio obliga a adivinar si el fallo que se esta mirando ya estaba
+    # arreglado.
+    log.info("VPN Manager %s", read_version())
 
 
 def verifier_for(*, allow_unsigned: bool) -> CatalogVerifier:

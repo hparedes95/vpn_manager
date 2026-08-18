@@ -31,6 +31,7 @@ from vpnmanager.core.protocol import ProfileSummary, ProtocolError
 from vpnmanager.ui.client import ServiceClient, action_label
 from vpnmanager.ui.transport import PipeTransport, PipeUnavailable
 from vpnmanager.ui.window import MainWindow
+from vpnmanager.version import read_version
 
 log = logging.getLogger("vpnmgr.ui")
 
@@ -259,7 +260,7 @@ def _run() -> int:
         )
         return 1
 
-    log.info("arrancando la bandeja")
+    log.info("arrancando la bandeja; VPN Manager %s", read_version())
     client = ServiceClient(PipeTransport(), WindowsProcessLauncher())
     TrayApp(client).start()
     return app.exec()

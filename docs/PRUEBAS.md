@@ -17,9 +17,12 @@ Si solo vas a hacer una pasada, hazla en este orden: cada paso descarta una
 capa entera, y parar en el primero que falle ahorra el resto.
 
 ```powershell
-# 1. ¿Se instaló donde toca?
+# 1. ¿Se instaló donde toca, y QUÉ build es?
 Get-ChildItem "C:\Program Files\VpnManager" -Recurse -Filter *.exe |
-    Select-Object FullName
+    Select-Object FullName, LastWriteTime
+Get-Content "C:\Program Files\VpnManager\ui\_internal\vpnmanager\VERSION"
+#    Sale algo como 0.1.0-dev+c3910c9: el hash identifica el commit exacto.
+#    También está en el título de la ventana y en la primera línea de los logs.
 
 # 2. ¿El servicio existe y arranca? (PowerShell: sc.exe, NO sc)
 sc.exe query VpnManagerSvc
