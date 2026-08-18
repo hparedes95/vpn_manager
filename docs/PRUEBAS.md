@@ -234,19 +234,50 @@ adaptador tomaba el DNS por DHCP **vuelve a tomarlo por DHCP**, no clavado.
 
 ### 4.4 La sonda ❌
 
-Con una IP que responda a ping y una red que exista en tu tabla de rutas:
+Es lo que decide si un perfil está conectado de verdad. **Nunca se ha
+ejecutado.**
+
+Además de las tres comprobaciones devuelve `viaSpecificRoute` y `sameInterface`,
+que no deciden nada: están para ver *por qué* salió lo que salió.
+
+**a) Sin ningún túnel, con tu LAN.** Es el caso que más importa, porque es el
+que antes daba un falso positivo:
 
 ```powershell
-& powershell -ExecutionPolicy Bypass -File .\Test-TunnelState.ps1 `
+& powershell -ExecutionPolicy Bypass -File "$ps\Test-TunnelState.ps1" `
     -ProbeIp 192.168.0.9 -TargetNetworks 192.168.0.0/24
 ```
 
-**Tiene que pasar**: `adapterUp`, `routed` y `probeAnswers` a `true`, y
-`connected` a `true`.
+**Tiene que pasar**: `connected` a `true` si esa IP responde — es tu propia
+LAN, con ruta concreta, así que es correcto que salga conectado.
 
-Prueba también con una IP que no responda: `connected` a `false` y
-`probeAnswers` a `false`, pero los otros dos a `true`. Esa diferencia es la que
-separa un aviso de una caída.
+**b) Una IP que no responde:**
+
+```powershell
+& powershell -ExecutionPolicy Bypass -File "$ps\Test-TunnelState.ps1" `
+    -ProbeIp 10.255.255.254 -TargetNetworks 10.255.255.0/24
+```
+
+**Tiene que pasar**: `connected` a `false` y `probeAnswers` a `false`. Y
+**`routed` también a `false`**, porque no hay ruta concreta hacia esa red: sale
+por la de por defecto, que encaja con todo y no demuestra nada.
+
+Ese último punto es el que arreglé sin poder probarlo. Si `routed` sale `true`
+ahí, la ruta por defecto se está colando y un equipo sin VPN aparecería como
+«conectado con avisos» en vez de «caído».
+
+**c) Con tu VPN de Forti levantada**, y una IP interna de verdad:
+
+```powershell
+& powershell -ExecutionPolicy Bypass -File "$ps\Test-TunnelState.ps1" `
+    -ProbeIp <ip-interna> -TargetNetworks <red-del-cliente>/24
+```
+
+**Tiene que pasar**: los tres a `true`. Y luego desconecta en FortiClient y
+repítelo: `probeAnswers` a `false`.
+
+Esa diferencia entre b) y c) es la que separa un aviso de una caída, y es toda
+la razón de ser de la sonda.
 
 ## 5. El catálogo
 
