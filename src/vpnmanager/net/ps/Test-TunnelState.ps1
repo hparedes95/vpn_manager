@@ -97,29 +97,33 @@ try {
         ).Count -gt 0
     }
 
-    # 3. El trafico hacia cada red declarada sale por ese mismo interfaz, y por
-    #    una ruta concreta y no por la de por defecto.
+    # 3. El trafico hacia cada red declarada sale por ese mismo interfaz y por
+    #    una ruta CONCRETA, no por la de por defecto.
     #
     #    Lo segundo hace falta porque la ruta por defecto encaja con todo: sin
     #    ningun tunel, preguntar "por donde voy a 10.0.0.0" tambien contesta, y
-    #    contestaria lo mismo que para la IP testigo. Sin esta condicion, un
-    #    equipo pelado daba `routed` cierto y el perfil aparecia como
-    #    "conectado con avisos" en vez de "caido".
+    #    contesta lo mismo que para la IP testigo. Sin esta condicion, un equipo
+    #    pelado daba `routed` cierto.
     #
-    #    Un tunel completo puede no instalar mas ruta que la de por defecto, y
-    #    entonces `specific` es falso aunque el tunel exista. Para ese caso vale
-    #    que la IP testigo conteste: si contesta una IP interna, hay tunel. Es
-    #    la unica prueba que queda, y por eso entra aqui.
-    $sameInterface = ($null -ne $probeInterface)
-    $specific = ($null -ne $probeRoute -and -not $probeRoute.IsDefault)
+    #    Esta comprobacion NO puede mirar si la IP testigo responde. Se intento
+    #    —para cubrir un tunel completo que solo instale la ruta por defecto— y
+    #    el resultado fue que `connected` se reducia a
+    #    `adapterUp AND sameInterface AND answers`: la ruta se absorbia y dejaba
+    #    de comprobarse nada. Una IP interna que contestara por la LAN de la
+    #    oficina habria dado "conectado" sin ningun tunel, que es justo lo que
+    #    las tres comprobaciones existen para impedir.
+    #
+    #    El precio es un falso negativo conocido: un tunel completo que no
+    #    instale mas ruta que 0.0.0.0/0 sale como caido. Se paga a proposito,
+    #    porque equivocarse hacia "no conectado" es seguro y hacia "conectado"
+    #    no lo es. Muchos clientes instalan 0.0.0.0/1 y 128.0.0.0/1 justamente
+    #    para no pisar la de por defecto, y esos si cuentan como concretas.
+    $routed = ($null -ne $probeRoute -and -not $probeRoute.IsDefault)
     foreach ($network in $networks) {
         # La direccion de red basta para preguntar por donde se sale.
         $route = Get-RouteTo (($network.Trim() -split '/')[0])
-        if ($null -eq $route -or $route.InterfaceIndex -ne $probeInterface) {
-            $sameInterface = $false
-        }
-        elseif (-not $route.IsDefault) {
-            $specific = $true
+        if ($null -eq $route -or $route.InterfaceIndex -ne $probeInterface -or $route.IsDefault) {
+            $routed = $false
         }
     }
 
@@ -141,20 +145,16 @@ try {
         $ping.Dispose()
     }
 
-    # `specific` o, si no lo hay, que conteste una IP interna. Cualquiera de
-    # las dos demuestra tunel; ninguna de las dos, no hay nada que demostrar.
-    $routed = ($sameInterface -and ($specific -or $answers))
-
     Write-Result @{
         ok           = $true
         adapterUp    = [bool] $adapterUp
         routed       = [bool] $routed
         probeAnswers = [bool] $answers
         connected    = ([bool] $adapterUp -and [bool] $routed -and [bool] $answers)
-        # Para el log y para depurar en un puesto: dice POR QUE salio lo que
-        # salio, sin tener que volver a lanzarlo a mano.
-        viaSpecificRoute = [bool] $specific
-        sameInterface    = [bool] $sameInterface
+        # Para depurar en un puesto: dice POR QUE salio lo que salio, sin tener
+        # que volver a lanzarlo a mano. No decide nada.
+        probeInterface = $probeInterface
+        viaDefaultRoute = [bool] ($null -eq $probeRoute -or $probeRoute.IsDefault)
     }
 }
 catch {

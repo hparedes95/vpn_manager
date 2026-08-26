@@ -33,9 +33,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vpnmanager.core.models import Capability, ConnectionState
+from vpnmanager.core.models import ConnectionState
 from vpnmanager.core.protocol import ProfileSummary, Response
-from vpnmanager.ui.client import ServiceClient, action_label, is_open, needs_asking_first
+from vpnmanager.ui.client import (
+    ServiceClient,
+    action_label,
+    can_act,
+    is_open,
+    needs_asking_first,
+)
 from vpnmanager.version import read_version
 
 log = logging.getLogger("vpnmgr.ui")
@@ -149,17 +155,16 @@ class MainWindow(QWidget):
         return button
 
     def _button_for(self, summary: ProfileSummary) -> QPushButton:
-        connected = is_open(summary)
-        if connected and Capability.DISCONNECT in summary.capabilities:
-            label = "Desconectar"
-        elif connected:
-            # No se ofrece un boton que no puede cumplir lo que promete.
-            label = "Desconectar en su cliente"
-        else:
-            label = action_label(summary)
+        """El texto lo decide `client.py`, no esta ventana.
 
-        button = QPushButton(label)
-        button.setEnabled(not (connected and Capability.DISCONNECT not in summary.capabilities))
+        Lo deducia por su cuenta y acababa diciendo "Desconectar en su cliente"
+        donde la bandeja decia otra cosa para la misma fila. Un solo sitio
+        decide, y las dos superficies lo leen.
+        """
+        button = QPushButton(action_label(summary))
+        button.setEnabled(can_act(summary))
+        if not can_act(summary):
+            button.setToolTip("Este cliente no admite que se le pida desconectar: cierralo en el")
         button.clicked.connect(lambda _checked=False, s=summary: self.act_on(s))
         return button
 
@@ -229,9 +234,11 @@ class MainWindow(QWidget):
         )
 
     def act_on(self, summary: ProfileSummary) -> None:
-        connected = is_open(summary)
-        if connected:
-            if Capability.DISCONNECT in summary.capabilities:
+        if is_open(summary):
+            # DISCONNECT vale para las dos cosas: pedirle al cliente que
+            # desconecte, y —cuando nadie puede comprobarlo ni cerrarlo— que el
+            # servicio lo de por cerrado porque lo dice quien esta delante.
+            if can_act(summary):
                 self._watching.discard(summary.id)
                 self._report(summary, self._client.disconnect(summary.id))
             return

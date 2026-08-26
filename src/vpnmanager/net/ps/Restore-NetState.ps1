@@ -142,7 +142,13 @@ function Get-CurrentDns {
     try {
         $current = Get-DnsClientServerAddress -InterfaceIndex $InterfaceIndex `
                                               -AddressFamily IPv4 -ErrorAction Stop
-        return @($current.ServerAddresses)
+        # La coma de delante NO sobra. `return @($vacio)` no devuelve un array
+        # vacio: PowerShell lo desenrolla y devuelve $null, indistinguible de
+        # "no se pudo mirar". Con eso, un adaptador SIN servidores DNS parecia
+        # haber cambiado siempre, y la restauracion le hacia un
+        # -ResetServerAddresses en cada vuelta: justo lo que la comparacion
+        # venia a evitar.
+        return ,@($current.ServerAddresses)
     }
     catch {
         return $null  # no se pudo mirar: distinto de "no tiene ninguno"
@@ -151,7 +157,9 @@ function Get-CurrentDns {
 
 function Test-SameServers {
     param($Left, $Right)
-    if ($null -eq $Left -or $null -eq $Right) { return $false }
+    # Solo $null a la izquierda significa "no se pudo mirar"; a la derecha
+    # viene de la foto, donde la ausencia de servidores es un dato valido.
+    if ($null -eq $Left) { return $false }
     $a = @($Left)
     $b = @($Right)
     if ($a.Count -ne $b.Count) { return $false }

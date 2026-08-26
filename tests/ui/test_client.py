@@ -28,6 +28,7 @@ from vpnmanager.core.protocol import (
 from vpnmanager.ui.client import (
     ServiceClient,
     action_label,
+    can_act,
     is_open,
     needs_asking_first,
 )
@@ -265,8 +266,39 @@ def test_an_unverified_profile_offers_to_disconnect_when_it_can() -> None:
 
 def test_an_unverified_profile_does_not_claim_to_be_connected() -> None:
     """La diferencia con CONNECTED es justo lo que este estado existe para decir."""
-    assert action_label(summary(state=ConnectionState.UNVERIFIED)) == "Abierto"
+    assert action_label(summary(state=ConnectionState.UNVERIFIED)) != "Conectado"
     assert action_label(summary(state=ConnectionState.CONNECTED)) == "Conectado"
+
+
+def test_an_unverified_profile_offers_to_mark_it_closed() -> None:
+    """Sin sonda y sin conector que cierre, el unico que sabe es quien mira.
+
+    Sin este boton el perfil se quedaba abierto para siempre: el arbitro
+    rechaza reconectar lo que ya esta abierto, y nada podia devolverlo a
+    desconectado.
+    """
+    open_profile = summary(state=ConnectionState.UNVERIFIED)
+
+    assert action_label(open_profile) == "Marcar cerrada"
+    assert can_act(open_profile)
+
+
+def test_something_connected_that_cannot_be_disconnected_has_no_action() -> None:
+    """Ahi si se sabe que sigue conectado: el boton no puede prometer nada."""
+    connected = summary(state=ConnectionState.CONNECTED)
+
+    assert action_label(connected) == "Conectado"
+    assert not can_act(connected)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [ConnectionState.DISCONNECTED, ConnectionState.DOWN, ConnectionState.UNVERIFIED],
+)
+def test_the_button_does_something_in_every_state_but_the_dead_end(
+    state: ConnectionState,
+) -> None:
+    assert can_act(summary(state=state))
 
 
 def test_an_unverified_profile_is_not_asked_for_confirmation_again() -> None:

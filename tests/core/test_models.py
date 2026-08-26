@@ -750,3 +750,33 @@ def test_a_split_without_a_witness_ip_is_not_warned_about_the_watchdog() -> None
 
     assert not mentions(warnings, "90 s")
     assert mentions(warnings, "no se puede verificar el estado real")
+
+
+# --------------------------------------------------------------------------
+# A quien le corresponde tener estado real
+# --------------------------------------------------------------------------
+
+
+def test_an_app_profile_does_not_need_verification() -> None:
+    """No monta adaptador ni pone rutas: no es que le falte el dato, no aplica."""
+    assert not make_profile(tunnel_type=TunnelType.APP, probe_ip=None).needs_verification
+
+
+@pytest.mark.parametrize("tunnel_type", [TunnelType.FULL, TunnelType.SPLIT])
+def test_a_tunnel_profile_needs_verification(tunnel_type: TunnelType) -> None:
+    assert make_profile(tunnel_type=tunnel_type).needs_verification
+
+
+def test_an_app_profile_with_a_witness_and_no_networks_is_not_warned() -> None:
+    """La sonda ni llega a mirar la ruta de un APP: avisar seria ruido.
+
+    Esta era la esquina que se colaba cuando la excepcion de APP estaba
+    repetida a mano en cada sitio en vez de vivir en una propiedad.
+    """
+    profile = make_profile(
+        tunnel_type=TunnelType.APP,
+        probe_ip="10.90.0.4",
+        target_networks=(),
+    )
+
+    assert profile.warnings() == []

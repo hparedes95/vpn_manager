@@ -161,8 +161,24 @@ ORPHAN = make_profile("huerfano", connector="nadie")
 # Recien dado de alta: se sabe que cliente lo abre y nada mas. Es el caso que
 # permite anadir una VPN sin haberla conectado nunca.
 NO_WITNESS = make_profile("sin-testigo", TunnelType.SPLIT, probe_ip=None)
+# El caso que se queda sin salida: nadie puede comprobarlo (sin IP testigo) y
+# nadie sabe cerrarlo (conector que solo lanza). Es lo normal en una VPN recien
+# dada de alta, porque ningun conector esta verificado todavia.
+NO_WAY_BACK = make_profile("sin-salida", TunnelType.SPLIT, connector="forcepoint", probe_ip=None)
 
-CATALOG = {p.id: p for p in (FULL_A, FULL_B, FULL_RDP, SPLIT_A, ONLY_LAUNCH, ORPHAN, NO_WITNESS)}
+CATALOG = {
+    p.id: p
+    for p in (
+        FULL_A,
+        FULL_B,
+        FULL_RDP,
+        SPLIT_A,
+        ONLY_LAUNCH,
+        ORPHAN,
+        NO_WITNESS,
+        NO_WAY_BACK,
+    )
+}
 
 
 @pytest.fixture
@@ -932,3 +948,100 @@ def test_a_profile_outside_the_catalog_is_not_opened(
 
     assert not response.ok
     assert launcher.calls == []
+
+
+def test_opening_the_client_does_not_downgrade_a_connected_tunnel(
+    orchestrator: Orchestrator,
+) -> None:
+    """Abrir el cliente de algo conectado es legitimo: para mirar su config.
+
+    Pisar el estado con LAUNCHING dejaba al arbitro sin saber que la maquina
+    estaba ocupada, a la interfaz ofreciendo "Conectar" sobre algo conectado, y
+    al propio arbitro rechazando esa conexion. Un tunel completo vivo perdido
+    de vista.
+    """
+    orchestrator.handle(connect("full-a"))
+    before = orchestrator.handle(Request(command=Command.STATUS, profile_id="full-a")).state
+
+    orchestrator.handle(launch("full-a", confirmed=True))
+
+    after = orchestrator.handle(Request(command=Command.STATUS, profile_id="full-a")).state
+    assert before is ConnectionState.CONNECTED
+    assert after is ConnectionState.CONNECTED
+
+
+def test_connect_answers_with_the_state_it_recorded(orchestrator: Orchestrator) -> None:
+    """Y no con lo que afirmo el conector, que puede ser mas de lo que se sabe."""
+    response = orchestrator.handle(connect("sin-testigo"))
+    listed = orchestrator.handle(Request(command=Command.LIST))
+    summary = next(p for p in listed.profiles if p.id == "sin-testigo")
+
+    assert response.state is summary.state
+    assert response.state is not ConnectionState.CONNECTED
+
+
+# --------------------------------------------------------------------------
+# Salir del estado "abierto y sin comprobar"
+# --------------------------------------------------------------------------
+
+
+def test_an_unverified_profile_can_be_marked_as_closed(
+    orchestrator: Orchestrator,
+) -> None:
+    """Sin sonda y sin conector que cierre, el unico que sabe es el usuario.
+
+    No creerle era un callejon sin salida: el arbitro rechaza reconectar lo que
+    ya esta abierto, la sonda no puede desmentirlo y ningun conector sabe
+    cerrarlo. Una VPN recien dada de alta dejaba de poder conectarse hasta
+    reiniciar el servicio.
+    """
+    orchestrator.handle(connect("sin-salida"))
+
+    response = orchestrator.handle(Request(command=Command.DISCONNECT, profile_id="sin-salida"))
+
+    assert response.ok
+    assert response.state is ConnectionState.DISCONNECTED
+    assert "asegurate" in response.message
+
+
+def test_after_marking_it_closed_it_can_be_connected_again(
+    orchestrator: Orchestrator,
+) -> None:
+    """Que es el motivo entero por el que existe ese camino."""
+    orchestrator.handle(connect("sin-salida"))
+    orchestrator.handle(Request(command=Command.DISCONNECT, profile_id="sin-salida"))
+
+    assert orchestrator.handle(connect("sin-salida")).ok
+
+
+def test_marking_it_closed_disarms_the_watchdog(
+    orchestrator: Orchestrator, network: FakeNetwork, clock: FakeClock
+) -> None:
+    """El usuario acaba de decir que ya no hay tunel: no hay nada que revertir."""
+    no_witness_full = make_profile("full-sin-testigo", probe_ip=None, connector="forcepoint")
+    orchestrator = Orchestrator(
+        catalog={**CATALOG, no_witness_full.id: no_witness_full},
+        registry=orchestrator._registry,
+        network=network,
+        probe=orchestrator._probe,
+        watchdog=Watchdog(window_seconds=90.0, clock=clock),
+    )
+    orchestrator.handle(connect("full-sin-testigo"))
+    orchestrator.handle(Request(command=Command.DISCONNECT, profile_id="full-sin-testigo"))
+
+    clock.advance(120.0)
+
+    assert orchestrator.tick() == ()
+    assert network.restored == []
+
+
+def test_a_verifiable_profile_is_not_marked_closed_on_request(
+    orchestrator: Orchestrator,
+) -> None:
+    """Con sonda si se puede saber, asi que se sigue diciendo la verdad."""
+    orchestrator.handle(connect("solo-abrir"))
+
+    response = orchestrator.handle(Request(command=Command.DISCONNECT, profile_id="solo-abrir"))
+
+    assert not response.ok
+    assert response.manual_disconnect_first == ("solo-abrir",)

@@ -74,14 +74,14 @@ class PowerShellNetworkController:
                 timeout_seconds=RESTORE_TIMEOUT_SECONDS,
                 StatePath=handle.name,
             )
-            _log_what_was_restored(result.data, ok=result.ok)
+            _log_what_was_restored(result.data, ok=result.ok, error=result.error)
             return result.ok
         finally:
             with contextlib.suppress(OSError):
                 Path(handle.name).unlink()
 
 
-def _log_what_was_restored(data: dict[str, object], *, ok: bool) -> None:
+def _log_what_was_restored(data: dict[str, object], *, ok: bool, error: str = "") -> None:
     """Deja constancia de que hizo la restauracion, no solo de si fue bien.
 
     Una reversion ocurre sin nadie delante, de madrugada y con la sesion
@@ -98,12 +98,17 @@ def _log_what_was_restored(data: dict[str, object], *, ok: bool) -> None:
         log.info("restauracion de red: %s", detail)
         return
 
+    # `error` es lo unico que hay cuando el script no llego a responder: un
+    # plazo agotado, un fichero que no esta, una salida que no era JSON. En esos
+    # casos `data` viene vacia, y sin esto el log decia "sin detalle" justo
+    # cuando la red podia haberse quedado a medias.
     failures = data.get("failures")
-    log.error(
-        "restauracion de red incompleta: %s; fallos: %s",
-        detail,
-        "; ".join(str(item) for item in failures) if isinstance(failures, list) else "sin detalle",
+    reasons = (
+        "; ".join(str(item) for item in failures)
+        if isinstance(failures, list) and failures
+        else (error or "sin detalle")
     )
+    log.error("restauracion de red incompleta: %s; fallos: %s", detail, reasons)
 
 
 def _route_summary(data: dict[str, object]) -> tuple[str, ...]:

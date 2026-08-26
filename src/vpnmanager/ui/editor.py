@@ -149,6 +149,15 @@ class ProfileDialog(QDialog):
         self._breaks_is_automatic = profile is None
         self._target_is_automatic = profile is None
 
+        # Lo que el formulario NO enseña y por tanto no puede reconstruir. Se
+        # guarda y se devuelve tal cual al grabar.
+        #
+        # Sin esto, abrir el perfil de WireGuard del ejemplo y darle a Guardar
+        # sin tocar nada le cambiaba el `context` de `service` a `user_session`
+        # —y `/installtunnelservice` dejaba de correr como SYSTEM— ademas de
+        # borrarle `post_connect_apps` y `expected_client_version`. En silencio.
+        self._original = profile
+
         self._name = QLineEdit(profile.display_name if profile else "")
         self._name.setPlaceholderText("Ivanti - Cliente B")
         self._name.textChanged.connect(self._on_name_changed)
@@ -199,6 +208,13 @@ class ProfileDialog(QDialog):
             self._strategy.addItem(label, value)
 
         self._notes = QLineEdit(profile.notes if profile else "")
+
+        # Se mira el disco UNA vez. Son hasta cuatro rutas por cada uno de los
+        # ocho clientes, en `Program Files`, y eso con redireccion de carpetas
+        # o un antivirus mirando puede tardar. Antes se hacia al construir el
+        # dialogo y otra vez en cada cambio del desplegable, en el hilo de la
+        # interfaz.
+        self._installed = {provider.name: detect(provider) for provider in PROVIDERS}
 
         # El desplegable se rellena al final: al elegir el primero se dispara
         # `_on_connector_changed`, que ya necesita existir todo lo de arriba.
@@ -270,20 +286,38 @@ class ProfileDialog(QDialog):
         if profile is None:
             self._on_connector_changed()
             return
+
         index = self._connector.findData(profile.connector)
         if index >= 0:
             self._connector.setCurrentIndex(index)
+        else:
+            # Un conector que no esta en la lista: catalogo escrito a mano, o
+            # un conector retirado. Callarse dejaria el desplegable en el
+            # primero, y guardar reasignaria el perfil a OTRO cliente —con otro
+            # LaunchKind— sin que nadie se enterase.
+            QMessageBox.warning(
+                self,
+                "Conector desconocido",
+                f"Este perfil usa el conector «{profile.connector}», que no esta en la "
+                f"lista de clientes conocidos.\n\nSi guardas, quedara asignado a "
+                f"«{PROVIDERS[0].display_name}». Cancela si no es lo que quieres.",
+            )
         self._tunnel.setCurrentIndex(self._tunnel.findData(profile.tunnel_type))
         self._strategy.setCurrentIndex(self._strategy.findData(profile.disconnect_strategy))
 
     # -- Reacciones --------------------------------------------------------
 
     def _describe(self, provider: Provider) -> str:
-        """El desplegable dice cual esta instalado de verdad en esta maquina."""
-        found = detect(provider)
-        if found is None:
-            return f"{provider.display_name}  — no encontrado"
-        return f"{provider.display_name}  — instalado"
+        """El desplegable dice cual esta instalado de verdad en esta maquina.
+
+        Menos con las MSIX. `detect` no mira el disco para esas —una app de
+        Store no tiene ruta que comprobar— asi que decir "instalado" seria
+        afirmar algo que nadie ha comprobado. Se dice lo que es.
+        """
+        if provider.launch_kind is LaunchKind.MSIX:
+            return f"{provider.display_name}  — app de Store"
+        found = self._installed.get(provider.name)
+        return f"{provider.display_name}  — {'instalado' if found else 'no encontrado'}"
 
     def _current_provider(self) -> Provider:
         return PROVIDERS_BY_NAME[self._connector.currentData()]
@@ -298,7 +332,7 @@ class ProfileDialog(QDialog):
         # Solo se rellena solo lo que no ha tocado nadie: si alguien busco el
         # .exe a mano, cambiar de cliente no puede borrarselo.
         if self._target_is_automatic:
-            self._target.setText(detect(provider) or "")
+            self._target.setText(self._installed.get(provider.name) or "")
         self._browse.setEnabled(provider.launch_kind is LaunchKind.EXE)
 
     def _on_name_changed(self, text: str) -> None:
@@ -370,6 +404,7 @@ class ProfileDialog(QDialog):
 
     def _build(self) -> Profile:
         provider = self._current_provider()
+        original = self._original
         return Profile(
             id=self._id.text().strip(),
             display_name=self._name.text().strip(),
@@ -378,9 +413,14 @@ class ProfileDialog(QDialog):
                 kind=provider.launch_kind,
                 target=self._target.text().strip(),
                 args=tuple(self._args.text().split()),
-                # Los clientes con ventana se lanzan en la sesion del usuario.
-                # Correr como SYSTEM es un caso raro que se edita a mano.
-                context=LaunchContext.USER_SESSION,
+                # Los clientes con ventana se lanzan en la sesion del usuario, y
+                # eso es lo que se elige para una VPN nueva: correr como SYSTEM
+                # hay que justificarlo, no cae por comodidad.
+                #
+                # Pero al editar se conserva lo que hubiera. Reponerlo a
+                # USER_SESSION dejaba `wireguard.exe /installtunnelservice` sin
+                # privilegios solo por abrir el formulario y darle a Guardar.
+                context=original.launch.context if original else LaunchContext.USER_SESSION,
             ),
             tunnel_type=self._tunnel.currentData(),
             client_profile_name=self._client_profile.text().strip(),
@@ -391,6 +431,10 @@ class ProfileDialog(QDialog):
             breaks_local_connectivity=self._breaks.isChecked(),
             disconnect_strategy=self._strategy.currentData(),
             notes=self._notes.text().strip(),
+            # Nada de esto se enseña en el formulario, asi que el formulario no
+            # puede reconstruirlo: viaja intacto del perfil original.
+            post_connect_apps=original.post_connect_apps if original else (),
+            expected_client_version=original.expected_client_version if original else None,
         )
 
 
@@ -544,7 +588,7 @@ def _describe_profile(profile: Profile) -> str:
     parts.append(f"({profile.tunnel_type.value})")
     if profile.breaks_local_connectivity:
         parts.append("⚠ corta la red local")
-    if not profile.can_verify_state and profile.tunnel_type is not TunnelType.APP:
+    if not profile.can_verify_state and profile.needs_verification:
         parts.append("· sin IP testigo")
     return "  ".join(parts)
 

@@ -269,13 +269,15 @@ class Profile:
         ninguna VPN por un perfil al que le falta un dato opcional.
         """
         issues: list[str] = []
+        if not self.needs_verification:
+            return issues
         if not self.can_verify_state and self.tunnel_type is TunnelType.FULL:
             issues.append(
                 "un tunel COMPLETO sin probe_ip se deshara solo a los 90 s: la "
                 "interfaz solo confirma lo que puede comprobar, y sin confirmacion "
                 "el watchdog revierte. Ponle una IP testigo antes de usarlo"
             )
-        elif not self.can_verify_state and self.tunnel_type is not TunnelType.APP:
+        elif not self.can_verify_state:
             issues.append(
                 "sin probe_ip no se puede verificar el estado real (HU-02): "
                 "se abrira el cliente, pero nunca dira 'conectado'"
@@ -289,12 +291,22 @@ class Profile:
 
     @property
     def can_verify_state(self) -> bool:
-        """Si hay con que comprobar el estado real de este perfil.
-
-        Un perfil APP nunca monta tunel ni pone rutas, asi que no es que le
-        falte el dato: es que no aplica.
-        """
+        """Si hay con que comprobar el estado real de este perfil."""
         return self.probe_ip is not None
+
+    @property
+    def needs_verification(self) -> bool:
+        """Si a este perfil le corresponde tener estado real que comprobar.
+
+        Un APP no monta adaptador ni pone rutas —es reenvio TCP por
+        aplicacion— asi que no es que le falte la IP testigo: es que no aplica.
+
+        Existe como propiedad porque esa excepcion estaba repetida en cuatro
+        sitios como `... and tunnel_type is not APP`, y en uno de ellos se
+        habia olvidado: un APP con IP testigo y sin redes recibia el aviso de
+        que no se podia comprobar la ruta, cuando la sonda ni llega a mirarla.
+        """
+        return self.tunnel_type is not TunnelType.APP
 
     def _client_profile_name_issues(self) -> list[str]:
         """El nombre de la conexion dentro del cliente oficial.

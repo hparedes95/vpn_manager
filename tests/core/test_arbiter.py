@@ -433,3 +433,91 @@ def test_only_a_cleanly_disconnected_session_frees_the_machine(
     state: ConnectionState, occupying: bool
 ) -> None:
     assert is_occupying(session("cualquiera", state)) is occupying
+
+
+# --------------------------------------------------------------------------
+# Perfiles abiertos que nadie ha podido comprobar
+# --------------------------------------------------------------------------
+
+
+def test_an_unverified_profile_is_not_launched_twice(arbiter: TunnelArbiter) -> None:
+    """Su cliente ya esta abierto: volver a abrirlo no lo mejora.
+
+    Sin IP testigo tampoco sabriamos que el segundo intento fue a mejor, y un
+    FULL lanzado dos veces es justo lo que el arbitro existe para evitar.
+    """
+    plan = arbiter.plan_connection("full-a", [session("full-a", ConnectionState.UNVERIFIED)])
+
+    assert not plan.allowed
+    assert "ya esta abierto" in plan.refusal
+
+
+def test_an_unverified_profile_occupies_the_machine() -> None:
+    """Sin poder comprobarlo hay que dar por hecho que ocupa, no lo contrario.
+
+    Un perfil abierto del que no se sabe nada pudo dejar rutas puestas. Tratarlo
+    como libre porque no se puede mirar seria justo la suposicion peligrosa.
+    """
+    assert is_occupying(session("full-a", ConnectionState.UNVERIFIED))
+
+
+def test_an_unverified_full_evicts_another_full(arbiter: TunnelArbiter) -> None:
+    """Ocupa, asi que hay que desalojarlo antes de montar otro completo."""
+    plan = arbiter.plan_connection("full-b", [session("full-a", ConnectionState.UNVERIFIED)])
+
+    assert plan.allowed
+    assert plan.disconnect_first == ("full-a",)
+
+
+def test_an_unverified_full_that_nobody_can_disconnect_refuses(
+    arbiter: TunnelArbiter,
+) -> None:
+    """Falla cerrado, igual que con cualquier otro estado ocupante."""
+    plan = arbiter.plan_connection("full-a", [session("full-sso", ConnectionState.UNVERIFIED)])
+
+    assert not plan.allowed
+    assert plan.manual_disconnect_first == ("full-sso",)
+
+
+def test_an_unverified_split_does_not_block_a_full(arbiter: TunnelArbiter) -> None:
+    """Un SPLIT no entra en el arbitro por estar sin comprobar."""
+    plan = arbiter.plan_connection("full-a", [session("split-a", ConnectionState.UNVERIFIED)])
+
+    assert plan.allowed
+    assert plan.disconnect_first == ()
+
+
+# Ocupan la maquina pero reconectarlos es legitimo: estan rotos y se
+# reintenta. Todo lo demas que ocupe tiene que rechazar la reentrada.
+RETRYABLE = frozenset({ConnectionState.DOWN, ConnectionState.ERROR})
+
+
+@pytest.mark.parametrize(
+    "state",
+    [state for state in ConnectionState if state not in RETRYABLE],
+)
+def test_every_state_in_progress_refuses_reentry(
+    arbiter: TunnelArbiter, state: ConnectionState
+) -> None:
+    """Ningun estado en marcha puede quedarse sin motivo de rechazo.
+
+    Parametrizado sobre el enum entero a proposito: si manana se anade un
+    estado y se olvida en REENTRY_REFUSALS, el perfil se relanzaria en silencio
+    en vez de decir que ya esta en marcha, y este test lo caza sin que nadie
+    tenga que acordarse de venir aqui.
+    """
+    if state is ConnectionState.DISCONNECTED:
+        # No ocupa: reconectarlo es exactamente lo que se espera.
+        assert arbiter.plan_connection("full-a", [session("full-a", state)]).allowed
+        return
+
+    plan = arbiter.plan_connection("full-a", [session("full-a", state)])
+
+    assert not plan.allowed, state
+    assert plan.refusal, state
+
+
+@pytest.mark.parametrize("state", sorted(RETRYABLE, key=str))
+def test_a_broken_tunnel_can_be_retried(arbiter: TunnelArbiter, state: ConnectionState) -> None:
+    """Caido o en error se reintenta: rechazarlo dejaria el perfil bloqueado."""
+    assert arbiter.plan_connection("full-a", [session("full-a", state)]).allowed

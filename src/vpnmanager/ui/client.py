@@ -193,16 +193,32 @@ def action_label(summary: ProfileSummary) -> str:
 
     Se decide con lo que el conector declara, no con lo que nos gustaria que
     hiciera. Prometer automatizacion que no existe es peor que no tenerla.
+
+    Es la unica fuente: la ventana y la bandeja pintan el mismo perfil, y si
+    cada una lo dedujera por su cuenta acabarian diciendo cosas distintas de la
+    misma fila.
     """
-    if is_open(summary):
-        if Capability.DISCONNECT in summary.capabilities:
-            return "Desconectar"
-        # Sin poder desconectar, el boton solo puede describir lo que hay. Y lo
-        # que hay depende de si se ha llegado a comprobar algo.
-        return "Abierto" if summary.state is ConnectionState.UNVERIFIED else "Conectado"
-    if Capability.CONNECT in summary.capabilities:
-        return "Conectar"
-    return "Abrir cliente"
+    if not is_open(summary):
+        return "Conectar" if Capability.CONNECT in summary.capabilities else "Abrir cliente"
+    if Capability.DISCONNECT in summary.capabilities:
+        return "Desconectar"
+    if summary.state is ConnectionState.UNVERIFIED:
+        # Nadie puede comprobarlo ni cerrarlo, asi que el unico que sabe si
+        # sigue abierto es quien esta delante. El boton le deja decirlo, y sin
+        # el, el perfil se queda sin poder reconectarse nunca.
+        return "Marcar cerrada"
+    # Conectado y sin forma de desconectar: el boton solo puede describirlo.
+    return "Conectado"
+
+
+def can_act(summary: ProfileSummary) -> bool:
+    """Si el boton de un perfil hace algo al pulsarlo.
+
+    Un boton que no puede cumplir lo que promete se deja desactivado, y eso
+    pasa en un solo caso: un tunel que la sonda da por conectado y que ningun
+    conector sabe cerrar. Hay que ir a su cliente.
+    """
+    return not (is_open(summary) and action_label(summary) == "Conectado")
 
 
 def needs_asking_first(summary: ProfileSummary) -> bool:

@@ -43,7 +43,6 @@ from vpnmanager.core.models import (
     ProbeResult,
     Profile,
     Session,
-    TunnelType,
 )
 from vpnmanager.core.protocol import (
     Command,
@@ -220,8 +219,16 @@ class Orchestrator:
 
         result = connector.launch(profile)
         session = self._session(profile.id)
-        session.state = self._claimed(profile, result.state)
         session.pid = result.pid
+        # El estado NO se pisa si ya habia algo en marcha. Abrir el cliente de
+        # un tunel que ya esta conectado —para mirar su configuracion, que es
+        # justo para lo que existe este boton— no puede degradarlo a
+        # "lanzando": el arbitro dejaria de saber que la maquina esta ocupada,
+        # la interfaz ofreceria "Conectar" sobre algo conectado, y el propio
+        # arbitro rechazaria esa conexion. Un tunel completo vivo perdido de
+        # vista.
+        if session.state in (ConnectionState.DISCONNECTED, ConnectionState.ERROR):
+            session.state = self._claimed(profile, result.state)
         return Response(ok=result.ok, message=result.message, state=session.state)
 
     def _connect(self, profile: Profile, *, user_confirmed: bool) -> Response:
@@ -281,8 +288,12 @@ class Orchestrator:
 
         return Response(
             ok=result.ok,
+            # El estado apuntado, no el que afirmo el conector. Devolver
+            # `result.state` hacia que el servicio contestara CONNECTED de un
+            # perfil que el mismo acababa de registrar como UNVERIFIED, y quien
+            # se fiara de la respuesta daria por verificado lo que no lo esta.
+            state=session.state,
             message=result.message,
-            state=result.state,
             warnings=plan.warnings,
         )
 
@@ -292,8 +303,22 @@ class Orchestrator:
             return self._orphan(profile)
 
         if not connector.supports(Capability.DISCONNECT):
-            # No se marca como desconectado lo que sigue conectado: el estado
-            # tiene que seguir siendo el real, aunque sea incomodo.
+            if not profile.can_verify_state:
+                # Sin IP testigo no hay sonda, y sin conector que desconecte no
+                # hay nada que preguntar: la unica fuente que queda es quien
+                # esta delante. Se le cree.
+                #
+                # No creerle era un callejon sin salida. El perfil se quedaba en
+                # UNVERIFIED para siempre —el arbitro rechaza reconectar lo que
+                # ya esta abierto, la sonda no puede desmentirlo y ningun
+                # conector sabe cerrarlo— asi que una VPN recien dada de alta
+                # dejaba de poder conectarse hasta reiniciar el servicio. Y es
+                # justo el caso que el alta sin IP testigo viene a permitir.
+                return self._forget(profile)
+
+            # Con sonda si se puede saber, asi que no se marca como desconectado
+            # lo que sigue conectado: el estado tiene que seguir siendo el real,
+            # aunque sea incomodo.
             return Response(
                 ok=False,
                 message=(
@@ -314,6 +339,26 @@ class Orchestrator:
             self._watchdog.cancel(profile.id)
             session.pid = None
         return Response(ok=result.ok, message=result.message, state=session.state)
+
+    def _forget(self, profile: Profile) -> Response:
+        """Da por cerrado un perfil que nadie puede comprobar ni cerrar.
+
+        Se desarma el watchdog: la ventana existe para deshacer una conexion
+        que nadie confirmo, y aqui el usuario acaba de decir que ya no hay
+        conexion. Dejarla armada revertiria la red de un tunel que ya no esta.
+        """
+        self._watchdog.cancel(profile.id)
+        session = self._session(profile.id)
+        session.state = ConnectionState.DISCONNECTED
+        session.pid = None
+        return Response(
+            ok=True,
+            state=ConnectionState.DISCONNECTED,
+            message=(
+                f"'{profile.display_name}' queda como desconectado. Sin IP testigo no se "
+                f"puede comprobar, asi que asegurate de haberlo cerrado en su cliente"
+            ),
+        )
 
     def _status(self, profile: Profile) -> Response:
         state = self._refresh(profile)
@@ -350,7 +395,7 @@ class Orchestrator:
         """
         if state is not ConnectionState.CONNECTED:
             return state
-        if profile.can_verify_state or profile.tunnel_type is TunnelType.APP:
+        if profile.can_verify_state or not profile.needs_verification:
             return state
         return ConnectionState.UNVERIFIED
 
@@ -371,7 +416,7 @@ class Orchestrator:
         # Los APP quedan fuera: un reenvio TCP por aplicacion no monta
         # adaptador ni pone rutas, asi que no le falta el dato, es que no
         # aplica.
-        if not profile.can_verify_state and profile.tunnel_type is not TunnelType.APP:
+        if not profile.can_verify_state and profile.needs_verification:
             session.state = ConnectionState.UNVERIFIED
             return session.state
 
