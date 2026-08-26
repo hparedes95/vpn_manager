@@ -28,6 +28,7 @@ caracter mas y no un separador.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -37,6 +38,8 @@ from typing import Final, Protocol
 
 from vpnmanager.connectors.base import LaunchOutcome
 from vpnmanager.core.models import LaunchContext, LaunchKind, LaunchSpec
+
+log = logging.getLogger("vpnmgr")
 
 # Una app MSIX no tiene ruta de ejecutable: se abre por el shell, con su
 # Package Family Name. El explorador es quien sabe resolverlo.
@@ -144,6 +147,10 @@ def clean_environment(
     return env
 
 
+def _path_entries(path: str) -> list[str]:
+    return [entry for entry in path.split(PATH_SEPARATOR) if entry]
+
+
 def _inside_any(entry: str, directories: tuple[str, ...]) -> bool:
     """Si una entrada del PATH cae dentro de alguno de nuestros directorios.
 
@@ -219,16 +226,35 @@ class WindowsProcessLauncher:
             # haberlo parado, pero esto no cuesta nada y cierra el camino.
             return LaunchOutcome(started=False, detail=f"launch invalido: {'; '.join(issues)}")
 
+        argv = self._argv(spec)
+        working_directory = self._working_directory(spec)
+        environment = clean_environment()
+
+        # Todo lo que hace falta para saber por que no arranco, antes de
+        # intentarlo. De los tres fallos que ha habido aqui —directorio de
+        # trabajo heredado, PATH heredado, y un fallo que se reportaba como
+        # exito— ninguno se veia en el log, y cada uno costo una tanda de
+        # comandos dictados a mano.
+        log.info(
+            "arrancando %s | cwd=%s | argv=%d | PATH: %d entradas (%d quitadas nuestras)",
+            spec.target,
+            working_directory,
+            len(argv),
+            len(_path_entries(environment.get("PATH", ""))),
+            len(_path_entries(os.environ.get("PATH", "")))
+            - len(_path_entries(environment.get("PATH", ""))),
+        )
+
         _allow_the_client_to_come_to_the_front()
         try:
             process = subprocess.Popen(
-                self._argv(spec),
+                argv,
                 shell=False,
                 # Desde su propia carpeta, como hace un acceso directo.
-                cwd=self._working_directory(spec),
+                cwd=working_directory,
                 # Y con el entorno del usuario, no con el nuestro: heredar el
                 # PATH de un bundle de PyInstaller le hace cargar nuestras DLL.
-                env=clean_environment(),
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -237,8 +263,10 @@ class WindowsProcessLauncher:
         except OSError as error:
             # FileNotFoundError incluida: el cliente puede no estar instalado
             # en este puesto, y eso es informacion util, no una excepcion.
+            log.warning("no arranco %s: %s", spec.target, error.strerror)
             return LaunchOutcome(started=False, detail=f"no se pudo arrancar: {error.strerror}")
 
+        log.info("arrancado %s con pid %s", spec.target, process.pid)
         return LaunchOutcome(started=True, pid=self._pid_of(spec, process.pid))
 
     def _working_directory(self, spec: LaunchSpec) -> str | None:

@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import sys
 import traceback
-from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
@@ -29,6 +27,7 @@ from vpnmanager.connectors.process import WindowsProcessLauncher
 from vpnmanager.core.models import ConnectionState
 from vpnmanager.core.protocol import ProfileSummary, ProtocolError
 from vpnmanager.ui.client import ServiceClient, action_label
+from vpnmanager.ui.paths import LOG_PATH
 from vpnmanager.ui.transport import PipeTransport, PipeUnavailable
 from vpnmanager.ui.window import MainWindow
 from vpnmanager.version import read_version
@@ -38,7 +37,7 @@ log = logging.getLogger("vpnmgr.ui")
 # La bandeja se empaqueta sin consola, asi que un fallo al arrancar no deja
 # ni un mensaje: el icono simplemente no aparece. El log es lo unico que
 # permite saber por que, y por eso se escribe desde la primera linea.
-LOG_PATH = Path(os.environ.get("LOCALAPPDATA", ".")) / "VpnManager" / "vpnmgr-ui.log"
+
 
 # Cada cuanto se refresca el menu y se confirman las conexiones en marcha. La
 # ventana del watchdog son 90 s, asi que 10 deja margen de sobra para varios

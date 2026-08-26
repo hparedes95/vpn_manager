@@ -11,10 +11,42 @@ la red no cueste un viaje.
 
 ---
 
-## 0. Orden para descartar rápido
+## 0. Lo único que hace falta hacer
 
-Si solo vas a hacer una pasada, hazla en este orden: cada paso descarta una
-capa entera, y parar en el primero que falle ahorra el resto.
+**Instala, abre la ventana y pulsa «Diagnóstico…».**
+
+Comprueba el puesto entero, deja el informe en el portapapeles y lo guarda en
+`%LOCALAPPDATA%\VpnManager\diagnostico.txt`. Si algo sale `FALLA` o `?`, ese
+texto es lo único que hay que enviar.
+
+No cambia nada: no arranca clientes, no toca la red y no escribe el catálogo.
+
+Lo que mira, en el orden en que cada cosa descarta una capa entera:
+
+| | Qué contesta |
+|---|---|
+| Ejecutables instalados | Si la instalación quedó completa |
+| Scripts de red presentes | Si el servicio puede leer y restaurar la red |
+| El servicio está escuchando | Si existe `\\.\pipe\vpnmgr` — la comprobación buena, no `Get-Service` |
+| Catálogo de VPN | Si se lee y cuántos perfiles tiene |
+| **Los clientes del catálogo están instalados** | Si cada `.exe` está donde dice el catálogo |
+| Clientes VPN detectados en el equipo | Dónde está cada cliente de verdad, para corregir una ruta mala |
+| El PATH que se le pasa a un cliente | Si el saneado que arregló FortiClient aplica aquí |
+
+La quinta es la que más falla y la más confusa: el servicio manda la orden, la
+interfaz intenta arrancar un binario que no está, y sin esto lo único que se ve
+es que no pasa nada.
+
+Y en `%LOCALAPPDATA%\VpnManager\vpnmgr-ui.log`, cada intento de abrir un
+cliente deja su línea: qué se lanzó, desde qué carpeta, con cuántas entradas de
+`PATH` y si arrancó.
+
+---
+
+## 0.b A mano, si hace falta afinar
+
+Ya no hace falta para el diagnóstico normal. Está aquí por si hay que mirar algo
+concreto que el informe no cubre.
 
 ```powershell
 # 1. ¿Se instaló donde toca, y QUÉ build es?

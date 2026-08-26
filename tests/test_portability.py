@@ -37,6 +37,7 @@ ORCHESTRATOR = SRC / "service" / "orchestrator.py"
 DISPATCHER = SRC / "service" / "dispatcher.py"
 PROVIDERS = SRC / "connectors" / "providers.py"
 UI_CLIENT = SRC / "ui" / "client.py"
+DIAGNOSE = SRC / "diagnose.py"
 TRAY = SRC / "ui" / "tray.py"
 WINDOW = SRC / "ui" / "window.py"
 
@@ -59,6 +60,9 @@ TRAY_MAY_IMPORT = frozenset(
         "vpnmanager.security.catalog",
         "vpnmanager.connectors.providers",
         "vpnmanager.version",
+        "vpnmanager.diagnose",
+        "vpnmanager.ui.probe_windows",
+        "vpnmanager.ui.paths",
     }
 )
 
@@ -104,6 +108,9 @@ PLATFORM_FREE_MODULES = [
     # de la interfaz que se puede probar sin escritorio, y tiene que seguir
     # pudiendose.
     UI_CLIENT,
+    # El recolector del diagnostico decide como se cuenta; quien va a buscar
+    # los datos a Windows es `ui/probe_windows.py`, que entra por un puerto.
+    DIAGNOSE,
 ]
 
 # Y estos, ademas, no pueden depender de otra capa. El orquestador queda fuera
@@ -162,6 +169,7 @@ def test_the_modules_under_watch_exist() -> None:
     assert ORCHESTRATOR.is_file()
     assert DISPATCHER.is_file()
     assert UI_CLIENT.is_file()
+    assert DIAGNOSE.is_file()
     assert TRAY.is_file()
     assert WINDOW.is_file()
     assert len(PLATFORM_FREE_MODULES) >= 8

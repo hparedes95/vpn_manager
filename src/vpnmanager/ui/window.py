@@ -15,12 +15,14 @@ del todo haria que el servicio deshiciera los tuneles a los 90 segundos.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -42,6 +44,7 @@ from vpnmanager.ui.client import (
     is_open,
     needs_asking_first,
 )
+from vpnmanager.ui.paths import REPORT_PATH
 from vpnmanager.version import read_version
 
 log = logging.getLogger("vpnmgr.ui")
@@ -104,11 +107,19 @@ class MainWindow(QWidget):
         )
         manage.clicked.connect(self._open_editor)
 
+        diagnose = QPushButton("Diagnostico…")
+        diagnose.setToolTip(
+            "Comprueba el puesto entero y deja un informe para enviar. "
+            "No cambia nada: ni arranca clientes ni toca la red."
+        )
+        diagnose.clicked.connect(self.run_diagnostics)
+
         refresh = QPushButton("Actualizar")
         refresh.clicked.connect(self.refresh_now)
 
         top = QHBoxLayout()
         top.addWidget(self._status, 1)
+        top.addWidget(diagnose)
         top.addWidget(manage)
         top.addWidget(refresh)
 
@@ -190,6 +201,41 @@ class MainWindow(QWidget):
                 "que solo lo puede cambiar un administrador.\n\nEs la misma "
                 "proteccion que impide editarlo con el Bloc de notas.",
             )
+
+    def run_diagnostics(self) -> None:
+        """Comprueba el puesto y deja el informe listo para enviar.
+
+        Existe para que nadie tenga que ir dictando comandos de PowerShell uno
+        a uno cuando algo falla. Lo que hay que mirar lo sabe el programa.
+
+        El informe se copia al portapapeles ademas de guardarse: pegarlo en un
+        mensaje tiene que ser un Ctrl+V, no buscar un fichero.
+        """
+        from vpnmanager.diagnose import collect
+        from vpnmanager.ui.probe_windows import WindowsProbe
+
+        try:
+            report = collect(read_version(), WindowsProbe())
+            text = report.render()
+        except Exception:
+            log.exception("el diagnostico ha fallado")
+            self.note("✕ el diagnostico ha fallado; mira el log de la interfaz")
+            return
+
+        saved = _save_report(text)
+        with contextlib.suppress(Exception):
+            QApplication.clipboard().setText(text)
+
+        self.note("· diagnostico hecho" + (f", guardado en {saved}" if saved else ""))
+        for check in report.failed:
+            self.note(f"  ✕ {check.name}: {check.detail}")
+
+        QMessageBox.information(
+            self,
+            "Diagnostico" + ("" if report.all_ok else " — hay algo que revisar"),
+            f"{text}\n\n"
+            + ("Copiado al portapapeles." if saved is None else f"Copiado y guardado en:\n{saved}"),
+        )
 
     def refresh_now(self) -> None:
         """Lo rellena la bandeja en su ciclo; esto solo lo adelanta."""
@@ -301,6 +347,19 @@ class MainWindow(QWidget):
         """
         event.ignore()
         self.hide()
+
+
+def _save_report(text: str) -> str | None:
+    """Junto al log de la interfaz, que es donde ya se busca todo lo demas."""
+    try:
+        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REPORT_PATH.write_text(text, encoding="utf-8")
+        return str(REPORT_PATH)
+    except OSError:
+        # Sin fichero se sigue: el informe ya esta en el portapapeles y en el
+        # cuadro de dialogo.
+        log.exception("no se pudo guardar el informe de diagnostico")
+        return None
 
 
 def _tunnel_item(summary: ProfileSummary) -> QTableWidgetItem:
